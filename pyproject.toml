@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "python-qube-heatpump"
+version = "1.0.0"
+authors = [
+  { name="MattieGit", email="6250046+MattieGit@users.noreply.github.com" },
+]
+description = "Async Modbus client for Qube Heat Pumps"
+readme = "README.md"
+requires-python = ">=3.12"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "pymodbus>=3.6.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/MattieGit/python-qube-heatpump"
+"Bug Tracker" = "https://github.com/MattieGit/python-qube-heatpump/issues"
