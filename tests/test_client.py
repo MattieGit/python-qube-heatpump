@@ -1,8 +1,6 @@
 """Test the Qube Heat Pump client."""
-import asyncio
 from unittest.mock import MagicMock, AsyncMock
 import pytest
-from pymodbus.exceptions import ModbusException
 from python_qube_heatpump import QubeClient
 @pytest.mark.asyncio
 async def test_connect(mock_modbus_client):
