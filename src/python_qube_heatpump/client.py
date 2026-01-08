@@ -1,11 +1,10 @@
 """Client for Qube Heat Pump."""
 
 import logging
+import struct
 from typing import Optional
 
 from pymodbus.client import AsyncModbusTcpClient
-from pymodbus.payload import BinaryPayloadDecoder
-from pymodbus.constants import Endian
 
 from . import const
 from .models import QubeState
@@ -80,16 +79,48 @@ class QubeClient:
                 _LOGGER.warning("Error reading address %s", address)
                 return None
 
-            decoder = BinaryPayloadDecoder.fromRegisters(
-                result.registers, byteorder=Endian.Big, wordorder=Endian.Little
-            )
+            regs = result.registers
+            val = 0
+
+            # Manual decoding to avoid pymodbus.payload dependencies
+            # Assuming Little Endian Word Order for 32-bit values [LSW, MSW] per standard Modbus often used
+            # But the original code used Endian.Little WordOrder.
+            # Decoder: byteorder=Endian.Big, wordorder=Endian.Little
+            # Big Endian Bytes: [H, L]
+            # Little Endian Words: [Reg0, Reg1] -> [LSW, MSW]
+            #
+            # Example Float32: 123.456
+            # Reg0 (LSW)
+            # Reg1 (MSW)
+            # Full 32-bit int: (Reg1 << 16) | Reg0
+            # Then pack as >I (Big Endian 32-bit int) and unpack as >f (Big Endian float)?
+            #
+            # Wait, PyModbus BinaryPayloadDecoder.fromRegisters(registers, byteorder=Endian.Big, wordorder=Endian.Little)
+            # ByteOrder Big: Normal network byte order per register.
+            # WordOrder Little: The first register is the least significant word.
+            #
+            # So:
+            # 32-bit value = (regs[1] << 16) | regs[0]
+            # Then interpret that 32-bit integer as a float.
+            # To interpret int bits as float in Python: struct.unpack('!f', struct.pack('!I', int_val))[0]
 
             if data_type == const.DataType.FLOAT32:
-                val = decoder.decode_32bit_float()
+                # Combine 2 registers, Little Endian Word Order
+                int_val = (regs[1] << 16) | regs[0]
+                val = struct.unpack(">f", struct.pack(">I", int_val))[0]
             elif data_type == const.DataType.INT16:
-                val = decoder.decode_16bit_int()
+                val = regs[0]
+                # Signed 16-bit
+                if val > 32767:
+                    val -= 65536
             elif data_type == const.DataType.UINT16:
-                val = decoder.decode_16bit_uint()
+                val = regs[0]
+            elif data_type == const.DataType.UINT32:
+                val = (regs[1] << 16) | regs[0]
+            elif data_type == const.DataType.INT32:
+                val = (regs[1] << 16) | regs[0]
+                if val > 2147483647:
+                    val -= 4294967296
             else:
                 val = 0
 
