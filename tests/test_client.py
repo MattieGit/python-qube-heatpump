@@ -1,7 +1,10 @@
 """Test the Qube Heat Pump client."""
+
 from unittest.mock import AsyncMock, MagicMock
 import pytest
 from python_qube_heatpump import QubeClient
+
+
 @pytest.mark.asyncio
 async def test_connect(mock_modbus_client):
     """Test connection."""
@@ -11,6 +14,8 @@ async def test_connect(mock_modbus_client):
     mock_instance.connected = False
     assert await client.connect() is True
     mock_modbus_client.assert_called_with("1.2.3.4", port=502)
+
+
 @pytest.mark.asyncio
 async def test_read_registers(mock_modbus_client):
     """Test reading registers."""
@@ -28,6 +33,8 @@ async def test_read_registers(mock_modbus_client):
     result = await client.read_registers(10, 1)
     assert result == [123]
     mock_instance.read_holding_registers.assert_called_once()
+
+
 @pytest.mark.asyncio
 async def test_decode_registers():
     """Test Register Decoding."""
