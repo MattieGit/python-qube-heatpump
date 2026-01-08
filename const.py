@@ -1,6 +1,6 @@
 """Constants for Qube Heat Pump."""
 
-from enum import Enum, IntEnum
+from enum import Enum
 
 
 class ModbusType(str, Enum):
