@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock
 
+
 @pytest.fixture
 def mock_modbus_client(mocker):
     """Mock the Modbus client."""
