@@ -1,8 +1,7 @@
 """Client for Qube Heat Pump."""
 
 import logging
-import asyncio
-from typing import Any, Dict, List, Optional, Union
+from typing import Optional
 
 from pymodbus.client import AsyncModbusTcpClient
 from pymodbus.payload import BinaryPayloadDecoder
