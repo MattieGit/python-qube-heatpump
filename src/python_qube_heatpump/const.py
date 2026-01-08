@@ -16,6 +16,8 @@ class DataType(str, Enum):
     FLOAT32 = "float32"
     INT16 = "int16"
     UINT16 = "uint16"
+    INT32 = "int32"
+    UINT32 = "uint32"
 
 
 # Register definitions (Address, Type, Data Type, Scale, Offset)
