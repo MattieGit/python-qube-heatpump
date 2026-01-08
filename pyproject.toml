@@ -20,6 +20,14 @@ dependencies = [
     "pymodbus>=3.6.0",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-mock",
+]
+
 [project.urls]
 "Homepage" = "https://github.com/MattieGit/python-qube-heatpump"
 "Bug Tracker" = "https://github.com/MattieGit/python-qube-heatpump/issues"
+
