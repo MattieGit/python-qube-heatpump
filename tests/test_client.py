@@ -1,5 +1,5 @@
 """Test the Qube Heat Pump client."""
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 import pytest
 from python_qube_heatpump import QubeClient
 @pytest.mark.asyncio
@@ -17,15 +17,12 @@ async def test_read_registers(mock_modbus_client):
     client = QubeClient("1.2.3.4", 502)
     mock_instance = mock_modbus_client.return_value
     mock_instance.connected = True
-    
     # Mock response
     mock_resp = MagicMock()
     mock_resp.isError.return_value = False
     mock_resp.registers = [123]
-    
     # Setup the read_holding_registers method on the mock
     mock_instance.read_holding_registers = AsyncMock(return_value=mock_resp)
-    
     # We need to manually set the client on the wrapper if we bypass connect
     client._client = mock_instance
     result = await client.read_registers(10, 1)
@@ -34,7 +31,7 @@ async def test_read_registers(mock_modbus_client):
 @pytest.mark.asyncio
 async def test_decode_registers():
     """Test Register Decoding."""
-    # float32: 24.5 = 0x41C40000 -> 16836, 0 (Big Endian) 
+    # float32: 24.5 = 0x41C40000 -> 16836, 0 (Big Endian)
     # struct.unpack('>f', struct.pack('>HH', 16836, 0)) -> 24.5
     regs = [16836, 0]
     val = QubeClient.decode_registers(regs, "float32")
