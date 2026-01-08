@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Home Assistant Core Issues
+    url: https://github.com/home-assistant/core/issues
+    about: Please report integration issues in the Home Assistant Core repository.
+  - name: Qube Heat Pump Integration Documentation
+    url: https://www.home-assistant.io/integrations/qube_heatpump
+    about: Read the documentation before opening an issue.
