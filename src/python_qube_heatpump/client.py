@@ -46,11 +46,33 @@ class QubeClient:
         async def _read(const_def):
             return await self.read_value(const_def)
 
-        # Fetch basic sensors
+        # Fetch temperature sensors
         state.temp_supply = await _read(const.TEMP_SUPPLY)
         state.temp_return = await _read(const.TEMP_RETURN)
-        state.temp_outside = await _read(const.TEMP_OUTSIDE)
+        state.temp_source_in = await _read(const.TEMP_SOURCE_IN)
+        state.temp_source_out = await _read(const.TEMP_SOURCE_OUT)
+        state.temp_room = await _read(const.TEMP_ROOM)
         state.temp_dhw = await _read(const.TEMP_DHW)
+        state.temp_outside = await _read(const.TEMP_OUTSIDE)
+
+        # Fetch power and energy sensors
+        state.power_thermic = await _read(const.POWER_THERMIC)
+        state.power_electric = await _read(const.POWER_ELECTRIC_CALC)
+        state.energy_total_electric = await _read(const.ENERGY_ELECTRIC_TOTAL)
+        state.energy_total_thermic = await _read(const.ENERGY_THERMIC_TOTAL)
+        state.cop_calc = await _read(const.COP_CALC)
+
+        # Fetch operation sensors
+        state.status_code = await _read(const.STATUS_CODE)
+        state.compressor_speed = await _read(const.COMPRESSOR_SPEED)
+        state.flow_rate = await _read(const.FLOW_RATE)
+
+        # Fetch setpoints (holding registers)
+        state.setpoint_room_heat_day = await _read(const.SETPOINT_HEAT_DAY)
+        state.setpoint_room_heat_night = await _read(const.SETPOINT_HEAT_NIGHT)
+        state.setpoint_room_cool_day = await _read(const.SETPOINT_COOL_DAY)
+        state.setpoint_room_cool_night = await _read(const.SETPOINT_COOL_NIGHT)
+        state.setpoint_dhw = await _read(const.USER_DHW_SETPOINT)
 
         return state
 
