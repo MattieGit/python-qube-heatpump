@@ -80,3 +80,50 @@ pytest tests/components/qube_heatpump -v
 - [ ] Verify PyPI publish (GitHub Action)
 - [ ] Update HA integration manifest.json with new version
 - [ ] Run HA integration tests
+
+---
+
+## Architecture Decisions (Quick Reference)
+
+See `CLAUDE.md` for detailed rationale.
+
+### Entity Definitions
+- **Library defines**: key, name, address, input_type, data_type, unit, scale, offset, platform, writable
+- **Integration adds**: device_class, state_class, suggested_display_precision, translation_key, icon
+
+### File Structure (Target)
+```
+src/python_qube_heatpump/
+├── entities/
+│   ├── __init__.py          # Combined registry
+│   ├── base.py              # EntityDef dataclass
+│   ├── sensors.py           # Sensor definitions
+│   ├── binary_sensors.py    # Binary sensor definitions
+│   └── switches.py          # Switch definitions
+```
+
+### QubeState Strategy
+- Keep typed fields for core sensors (backward compatible with official HA)
+- Add `_extended: dict` for additional HACS entities
+- Use `state.get("key")` for extended entities
+- Promote to typed field when moving to official HA
+
+### QubeClient API
+```python
+# Type-specific reads
+read_sensor(entity) -> float | int | None
+read_binary_sensor(entity) -> bool | None
+read_switch_state(entity) -> bool | None
+
+# Writes
+write_switch(entity, value: bool) -> None
+write_setpoint(entity, value: float) -> None
+
+# Bulk
+get_all_data() -> QubeState  # Backward compatible
+read_entities(entities) -> dict[str, Any]
+```
+
+### Related Repos
+- HACS: `~/Github/qube_heatpump`
+- Official HA: `~/Github/core/homeassistant/components/qube_heatpump/`
