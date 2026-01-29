@@ -100,3 +100,146 @@ pytest tests/components/qube_heatpump --cov=homeassistant.components.qube_heatpu
 - Type hints on all functions
 - Docstrings for public methods
 - Follow ruff formatting rules
+
+---
+
+## Architecture Design Decisions (HACS → Official HA Transition)
+
+This section documents architectural decisions made to ensure smooth transition between:
+- **HACS integration**: `~/Github/qube_heatpump` (feature-complete with ~400 entities)
+- **Official HA integration**: `~/Github/core/homeassistant/components/qube_heatpump/` (currently sensors only)
+
+### 1. Entity Definitions Location
+
+**Decision**: Hybrid approach - library defines protocol-level properties, integration adds HA-specific metadata.
+
+**Library (`python-qube-heatpump`) defines**:
+- `key`: Unique identifier (e.g., `"temp_supply"`)
+- `name`: Human-readable name
+- `address`: Modbus register/coil address
+- `input_type`: COIL, DISCRETE_INPUT, INPUT_REGISTER, HOLDING_REGISTER
+- `data_type`: FLOAT32, INT16, UINT16, etc. (None for boolean types)
+- `unit`: Standard units (°C, kWh, W, %, L/min)
+- `scale`, `offset`: Protocol-level value transformations
+- `platform`: SENSOR, BINARY_SENSOR, SWITCH
+- `writable`: Boolean for write capability
+
+**Integration adds**:
+- `device_class`, `state_class`: HA-specific semantics
+- `suggested_display_precision`: Display formatting
+- `entity_category`, `translation_key`, `icon`: HA presentation
+
+**Rationale**: Keeps library reusable for non-HA applications while centralizing ~400 entity definitions.
+
+### 2. Entity Organization in Library
+
+**Decision**: Platform-based modules
+
+```
+src/python_qube_heatpump/
+├── entities/
+│   ├── __init__.py          # Exports all entities + combined registry
+│   ├── base.py              # EntityDef dataclass + enums
+│   ├── sensors.py           # ~300 sensor definitions
+│   ├── binary_sensors.py    # ~50 binary sensor definitions
+│   └── switches.py          # ~20 switch definitions
+```
+
+**Rationale**: Mirrors HA platform organization, easier maintenance.
+
+### 3. EntityDef Dataclass Structure
+
+```python
+@dataclass(frozen=True)
+class EntityDef:
+    """Definition of a Qube heat pump entity."""
+
+    # Identity
+    key: str                              # Unique identifier
+    name: str                             # Human-readable name
+
+    # Modbus specifics
+    address: int                          # Register/coil address
+    input_type: InputType                 # COIL, DISCRETE_INPUT, INPUT_REGISTER, HOLDING_REGISTER
+    data_type: DataType | None = None     # FLOAT32, INT16, etc. (None for coils)
+
+    # Platform hint
+    platform: Platform                    # SENSOR, BINARY_SENSOR, SWITCH
+
+    # Value transformation
+    scale: float | None = None
+    offset: float | None = None
+
+    # Unit (protocol-level)
+    unit: str | None = None               # "°C", "kWh", "W", "%", "L/min"
+
+    # Write capability
+    writable: bool = False
+```
+
+### 4. QubeClient API Methods
+
+**Decision**: Type-specific methods for clarity and type safety.
+
+```python
+# Reading
+async def read_sensor(self, entity: EntityDef) -> float | int | None
+async def read_binary_sensor(self, entity: EntityDef) -> bool | None
+async def read_switch_state(self, entity: EntityDef) -> bool | None
+
+# Writing
+async def write_switch(self, entity: EntityDef, value: bool) -> None
+async def write_setpoint(self, entity: EntityDef, value: float) -> None
+
+# Bulk operations
+async def get_all_data(self) -> QubeState  # Backward compatible
+async def read_entities(self, entities: list[EntityDef]) -> dict[str, Any]
+```
+
+### 5. QubeState Model Strategy
+
+**Decision**: Keep typed fields for core sensors, add `_extended` dict for additional entities.
+
+```python
+@dataclass
+class QubeState:
+    """State of the Qube Heat Pump."""
+
+    # Core sensors (official HA integration uses these directly)
+    temp_supply: float | None = None
+    temp_return: float | None = None
+    # ... all existing 18 fields ...
+
+    # Extended data for additional HACS entities
+    _extended: dict[str, Any] = field(default_factory=dict)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Get value by key, checking typed fields first, then extended."""
+        if hasattr(self, key) and not key.startswith('_'):
+            val = getattr(self, key)
+            if val is not None:
+                return val
+        return self._extended.get(key, default)
+```
+
+**Transition workflow (HACS → Official)**:
+1. HACS uses `state.get("new_sensor")` for extended entities
+2. When promoting to official: add typed field to `QubeState`
+3. Official integration uses `state.new_sensor` directly
+4. No breaking changes - both integrations work with same library version
+
+### 6. Related Repositories
+
+| Repository | Path | Purpose |
+|------------|------|---------|
+| python-qube-heatpump | `~/Github/python-qube-heatpump` | This library |
+| HACS integration | `~/Github/qube_heatpump` | Feature-complete custom component |
+| Official HA integration | `~/Github/core/homeassistant/components/qube_heatpump/` | Official HA core integration |
+
+### 7. Testing Strategy
+
+When making changes:
+1. Run library tests: `pytest tests/ -v`
+2. Install in HACS integration and test: `pip install -e ~/Github/python-qube-heatpump`
+3. Install in HA core and test: `pytest tests/components/qube_heatpump -v`
+4. Ensure no breaking changes to official integration's `QubeState` field access
