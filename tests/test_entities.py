@@ -97,3 +97,33 @@ def test_all_binary_sensors_have_required_fields():
             InputType.HOLDING_REGISTER,
             InputType.INPUT_REGISTER,
         ), f"Invalid input_type for {key}"
+
+
+def test_sensor_definitions_exist():
+    """Test sensor definitions are available."""
+    from python_qube_heatpump.entities.sensors import SENSORS
+
+    assert len(SENSORS) > 0
+
+    # Check core sensors exist
+    assert "temp_supply" in SENSORS
+    assert "temp_return" in SENSORS
+    assert "power_thermic" in SENSORS
+
+    # Verify a sensor's properties
+    temp = SENSORS["temp_supply"]
+    assert temp.platform == Platform.SENSOR
+    assert temp.input_type == InputType.INPUT_REGISTER
+    assert temp.data_type == DataType.FLOAT32
+    assert temp.unit == "°C"
+
+
+def test_all_sensors_have_required_fields():
+    """Test all sensors have required fields."""
+    from python_qube_heatpump.entities.sensors import SENSORS
+
+    for key, entity in SENSORS.items():
+        assert entity.key == key, f"Key mismatch for {key}"
+        assert entity.name, f"Missing name for {key}"
+        assert entity.platform == Platform.SENSOR, f"Wrong platform for {key}"
+        assert entity.data_type is not None, f"Missing data_type for {key}"
