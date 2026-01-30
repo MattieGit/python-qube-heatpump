@@ -2,6 +2,15 @@
 
 import pytest
 
+from python_qube_heatpump.entities import (
+    BINARY_SENSORS,
+    DataType,
+    EntityDef,
+    InputType,
+    Platform,
+    SENSORS,
+    SWITCHES,
+)
 from python_qube_heatpump.entities.base import (
     DataType,
     EntityDef,
@@ -157,3 +166,19 @@ def test_all_switches_have_required_fields():
         assert entity.platform == Platform.SWITCH, f"Wrong platform for {key}"
         assert entity.input_type == InputType.COIL, f"Wrong input_type for {key}"
         assert entity.writable is True, f"Switch {key} should be writable"
+
+
+def test_package_exports():
+    """Test that all entity collections are exported from package."""
+    # Test that we can import from the package level
+    assert len(BINARY_SENSORS) > 0
+    assert len(SENSORS) > 0
+    assert len(SWITCHES) > 0
+
+    # Verify types are correct
+    for entity in BINARY_SENSORS.values():
+        assert isinstance(entity, EntityDef)
+    for entity in SENSORS.values():
+        assert isinstance(entity, EntityDef)
+    for entity in SWITCHES.values():
+        assert isinstance(entity, EntityDef)
