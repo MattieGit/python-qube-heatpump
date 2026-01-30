@@ -162,18 +162,14 @@ class QubeClient:
             # Full 32-bit int: (Reg1 << 16) | Reg0
             # Then pack as >I (Big Endian 32-bit int) and unpack as >f (Big Endian float)?
             #
-            # Wait, PyModbus BinaryPayloadDecoder.fromRegisters(registers, byteorder=Endian.Big, wordorder=Endian.Little)
-            # ByteOrder Big: Normal network byte order per register.
-            # WordOrder Little: The first register is the least significant word.
-            #
-            # So:
-            # 32-bit value = (regs[1] << 16) | regs[0]
-            # Then interpret that 32-bit integer as a float.
-            # To interpret int bits as float in Python: struct.unpack('!f', struct.pack('!I', int_val))[0]
+            # Qube uses Big Endian word order (ABCD format):
+            # regs[0] = MSW (Most Significant Word)
+            # regs[1] = LSW (Least Significant Word)
+            # 32-bit value = (regs[0] << 16) | regs[1]
 
             if data_type == const.DataType.FLOAT32:
-                # Combine 2 registers, Little Endian Word Order
-                int_val = (regs[1] << 16) | regs[0]
+                # Combine 2 registers, Big Endian Word Order
+                int_val = (regs[0] << 16) | regs[1]
                 val = struct.unpack(">f", struct.pack(">I", int_val))[0]
             elif data_type == const.DataType.INT16:
                 val = regs[0]
@@ -183,9 +179,11 @@ class QubeClient:
             elif data_type == const.DataType.UINT16:
                 val = regs[0]
             elif data_type == const.DataType.UINT32:
-                val = (regs[1] << 16) | regs[0]
+                int_val = (regs[0] << 16) | regs[1]
+                val = int_val
             elif data_type == const.DataType.INT32:
-                val = (regs[1] << 16) | regs[0]
+                int_val = (regs[0] << 16) | regs[1]
+                val = int_val
                 if val > 2147483647:
                     val -= 4294967296
             else:
@@ -267,8 +265,9 @@ class QubeClient:
             )
 
             # Decode based on data type (use string comparison for safety)
+            # Qube uses big endian word order (ABCD): regs[0]=MSW, regs[1]=LSW
             if data_type_str == "float32":
-                int_val = (regs[1] << 16) | regs[0]
+                int_val = (regs[0] << 16) | regs[1]
                 val = struct.unpack(">f", struct.pack(">I", int_val))[0]
                 _LOGGER.debug(
                     "read_entity: key=%s float32 int_val=%s decoded=%s",
@@ -281,9 +280,11 @@ class QubeClient:
             elif data_type_str == "uint16":
                 val = regs[0]
             elif data_type_str == "uint32":
-                val = (regs[1] << 16) | regs[0]
+                int_val = (regs[0] << 16) | regs[1]
+                val = int_val
             elif data_type_str == "int32":
-                val = (regs[1] << 16) | regs[0]
+                int_val = (regs[0] << 16) | regs[1]
+                val = int_val
                 if val > 2147483647:
                     val -= 4294967296
 
@@ -447,9 +448,10 @@ class QubeClient:
             # Encode based on data type
             if entity.data_type == DataType.FLOAT32:
                 # Pack as big-endian float, then split into two registers
+                # Big Endian word order: regs[0]=MSW, regs[1]=LSW
                 packed = struct.pack(">f", write_value)
                 int_val = struct.unpack(">I", packed)[0]
-                regs = [int_val & 0xFFFF, (int_val >> 16) & 0xFFFF]
+                regs = [(int_val >> 16) & 0xFFFF, int_val & 0xFFFF]
                 result = await self._client.write_registers(
                     entity.address, regs, device_id=self.unit
                 )
