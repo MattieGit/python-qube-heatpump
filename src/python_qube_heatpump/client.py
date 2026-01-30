@@ -33,17 +33,21 @@ class QubeClient:
             self._connected = await self._client.connect()
         return self._connected
 
+    @property
+    def is_connected(self) -> bool:
+        """Return True if connected."""
+        return self._connected
+
     async def close(self) -> None:
         """Close connection."""
         self._client.close()
         self._connected = False
 
     async def get_all_data(self) -> QubeState:
-        """Fetch all definition data and return a state object."""
-        # Note: In a real implementation you might want to optimize this
-        # by reading contiguous blocks instead of one-by-one.
-        # For now, we wrap the individual reads for abstraction.
+        """Fetch all definition data and return a state object.
 
+        This fetches core sensors for the official HA integration.
+        """
         state = QubeState()
 
         # Helper to read and assign
@@ -79,6 +83,43 @@ class QubeClient:
         state.setpoint_dhw = await _read(const.USER_DHW_SETPOINT)
 
         return state
+
+    async def get_all_entities(self) -> dict[str, Any]:
+        """Fetch all entity values from library definitions.
+
+        This reads all sensors, binary sensors, and switches defined in the
+        library's entity definitions. Used by the HACS integration.
+
+        Returns:
+            Dictionary mapping entity keys to their values.
+        """
+        results: dict[str, Any] = {}
+
+        # Read all sensors
+        for key, entity in SENSORS.items():
+            try:
+                results[key] = await self.read_entity(entity)
+            except Exception as exc:
+                _LOGGER.debug("Error reading sensor %s: %s", key, exc)
+                results[key] = None
+
+        # Read all binary sensors
+        for key, entity in BINARY_SENSORS.items():
+            try:
+                results[key] = await self.read_entity(entity)
+            except Exception as exc:
+                _LOGGER.debug("Error reading binary sensor %s: %s", key, exc)
+                results[key] = None
+
+        # Read all switches
+        for key, entity in SWITCHES.items():
+            try:
+                results[key] = await self.read_entity(entity)
+            except Exception as exc:
+                _LOGGER.debug("Error reading switch %s: %s", key, exc)
+                results[key] = None
+
+        return results
 
     async def read_value(self, definition: tuple) -> float | None:
         """Read a single value based on the constant definition."""
