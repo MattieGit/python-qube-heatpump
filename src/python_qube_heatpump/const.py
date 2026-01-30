@@ -20,6 +20,42 @@ class DataType(str, Enum):
     UINT32 = "uint32"
 
 
+class StatusCode(str, Enum):
+    """Heat pump status codes."""
+
+    STANDBY = "standby"
+    ALARM = "alarm"
+    KEYBOARD_OFF = "keyboard_off"
+    COMPRESSOR_STARTUP = "compressor_startup"
+    COMPRESSOR_SHUTDOWN = "compressor_shutdown"
+    COOLING = "cooling"
+    HEATING = "heating"
+    START_FAIL = "start_fail"
+    HEATING_DHW = "heating_dhw"
+    UNKNOWN = "unknown"
+
+
+# Map numeric status codes to StatusCode enum values
+STATUS_CODE_MAP: dict[int, StatusCode] = {
+    1: StatusCode.STANDBY,
+    2: StatusCode.ALARM,
+    6: StatusCode.KEYBOARD_OFF,
+    8: StatusCode.COMPRESSOR_STARTUP,
+    9: StatusCode.COMPRESSOR_SHUTDOWN,
+    14: StatusCode.STANDBY,
+    15: StatusCode.COOLING,
+    16: StatusCode.HEATING,
+    17: StatusCode.START_FAIL,
+    18: StatusCode.STANDBY,
+    22: StatusCode.HEATING_DHW,
+}
+
+
+def get_status_code(code: int) -> StatusCode:
+    """Convert numeric status code to StatusCode enum."""
+    return STATUS_CODE_MAP.get(code, StatusCode.UNKNOWN)
+
+
 # Register definitions (Address, Type, Data Type, Scale, Offset)
 # Scale/Offset are None if not used.
 # Format: KEY = (Address, ModbusType, DataType, Scale, Offset)
