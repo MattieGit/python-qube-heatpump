@@ -80,7 +80,7 @@ class QubeClient:
 
         return state
 
-    async def read_value(self, definition: tuple) -> Optional[float]:
+    async def read_value(self, definition: tuple) -> float | None:
         """Read a single value based on the constant definition."""
         address, reg_type, data_type, scale, offset = definition
 

@@ -11,12 +11,6 @@ from python_qube_heatpump.entities import (
     SENSORS,
     SWITCHES,
 )
-from python_qube_heatpump.entities.base import (
-    DataType,
-    EntityDef,
-    InputType,
-    Platform,
-)
 
 
 def test_input_type_enum():
