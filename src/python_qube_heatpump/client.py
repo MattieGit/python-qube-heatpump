@@ -212,14 +212,23 @@ class QubeClient:
             The read value (float, int, or bool depending on entity type).
         """
         # Determine register count based on data type
-        if entity.data_type in (DataType.FLOAT32, DataType.UINT32, DataType.INT32):
+        # Use string comparison to handle potential enum class differences
+        data_type_str = entity.data_type.value if entity.data_type else None
+        if data_type_str in ("float32", "uint32", "int32"):
             count = 2
         else:
             count = 1
 
+        _LOGGER.debug(
+            "read_entity: key=%s addr=%s input_type=%s data_type=%s count=%s",
+            entity.key, entity.address, entity.input_type, data_type_str, count
+        )
+
         try:
-            # Read based on input type
-            if entity.input_type == InputType.COIL:
+            # Read based on input type (use string comparison for safety)
+            input_type_str = entity.input_type.value if entity.input_type else None
+
+            if input_type_str == "coil":
                 result = await self._client.read_coils(
                     entity.address, count=1, device_id=self.unit
                 )
@@ -228,7 +237,7 @@ class QubeClient:
                     return None
                 return bool(result.bits[0])
 
-            if entity.input_type == InputType.DISCRETE_INPUT:
+            if input_type_str == "discrete_input":
                 result = await self._client.read_discrete_inputs(
                     entity.address, count=1, device_id=self.unit
                 )
@@ -237,11 +246,11 @@ class QubeClient:
                     return None
                 return bool(result.bits[0])
 
-            if entity.input_type == InputType.INPUT_REGISTER:
+            if input_type_str == "input":
                 result = await self._client.read_input_registers(
                     entity.address, count=count, device_id=self.unit
                 )
-            else:  # HOLDING_REGISTER
+            else:  # holding
                 result = await self._client.read_holding_registers(
                     entity.address, count=count, device_id=self.unit
                 )
@@ -253,19 +262,27 @@ class QubeClient:
             regs = result.registers
             val: float | int = 0
 
-            # Decode based on data type
-            if entity.data_type == DataType.FLOAT32:
+            _LOGGER.debug(
+                "read_entity: key=%s raw_regs=%s", entity.key, regs
+            )
+
+            # Decode based on data type (use string comparison for safety)
+            if data_type_str == "float32":
                 int_val = (regs[1] << 16) | regs[0]
                 val = struct.unpack(">f", struct.pack(">I", int_val))[0]
-            elif entity.data_type == DataType.INT16:
+                _LOGGER.debug(
+                    "read_entity: key=%s float32 int_val=%s decoded=%s",
+                    entity.key, int_val, val
+                )
+            elif data_type_str == "int16":
                 val = regs[0]
                 if val > 32767:
                     val -= 65536
-            elif entity.data_type == DataType.UINT16:
+            elif data_type_str == "uint16":
                 val = regs[0]
-            elif entity.data_type == DataType.UINT32:
+            elif data_type_str == "uint32":
                 val = (regs[1] << 16) | regs[0]
-            elif entity.data_type == DataType.INT32:
+            elif data_type_str == "int32":
                 val = (regs[1] << 16) | regs[0]
                 if val > 2147483647:
                     val -= 4294967296
@@ -275,6 +292,11 @@ class QubeClient:
                 val = val * entity.scale
             if entity.offset is not None:
                 val = val + entity.offset
+
+            _LOGGER.debug(
+                "read_entity: key=%s final_value=%s (scale=%s, offset=%s)",
+                entity.key, val, entity.scale, entity.offset
+            )
 
             return val
 
