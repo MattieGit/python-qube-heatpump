@@ -135,11 +135,11 @@ class QubeClient:
         try:
             if reg_type == const.ModbusType.INPUT:
                 result = await self._client.read_input_registers(
-                    address, count=count, slave=self.unit
+                    address, count=count, device_id=self.unit
                 )
             else:
                 result = await self._client.read_holding_registers(
-                    address, count=count, slave=self.unit
+                    address, count=count, device_id=self.unit
                 )
 
             if result.isError():
@@ -221,7 +221,7 @@ class QubeClient:
             # Read based on input type
             if entity.input_type == InputType.COIL:
                 result = await self._client.read_coils(
-                    entity.address, count=1, slave=self.unit
+                    entity.address, count=1, device_id=self.unit
                 )
                 if result.isError():
                     _LOGGER.warning("Error reading coil %s", entity.address)
@@ -230,7 +230,7 @@ class QubeClient:
 
             if entity.input_type == InputType.DISCRETE_INPUT:
                 result = await self._client.read_discrete_inputs(
-                    entity.address, count=1, slave=self.unit
+                    entity.address, count=1, device_id=self.unit
                 )
                 if result.isError():
                     _LOGGER.warning("Error reading discrete input %s", entity.address)
@@ -239,11 +239,11 @@ class QubeClient:
 
             if entity.input_type == InputType.INPUT_REGISTER:
                 result = await self._client.read_input_registers(
-                    entity.address, count=count, slave=self.unit
+                    entity.address, count=count, device_id=self.unit
                 )
             else:  # HOLDING_REGISTER
                 result = await self._client.read_holding_registers(
-                    entity.address, count=count, slave=self.unit
+                    entity.address, count=count, device_id=self.unit
                 )
 
             if result.isError():
@@ -381,7 +381,7 @@ class QubeClient:
 
         try:
             result = await self._client.write_coil(
-                entity.address, value, slave=self.unit
+                entity.address, value, device_id=self.unit
             )
             if result.isError():
                 _LOGGER.warning("Error writing switch %s", key)
@@ -429,17 +429,17 @@ class QubeClient:
                 int_val = struct.unpack(">I", packed)[0]
                 regs = [int_val & 0xFFFF, (int_val >> 16) & 0xFFFF]
                 result = await self._client.write_registers(
-                    entity.address, regs, slave=self.unit
+                    entity.address, regs, device_id=self.unit
                 )
             elif entity.data_type == DataType.INT16:
                 if write_value < 0:
                     write_value = int(write_value) + 65536
                 result = await self._client.write_register(
-                    entity.address, int(write_value), slave=self.unit
+                    entity.address, int(write_value), device_id=self.unit
                 )
             elif entity.data_type == DataType.UINT16:
                 result = await self._client.write_register(
-                    entity.address, int(write_value), slave=self.unit
+                    entity.address, int(write_value), device_id=self.unit
                 )
             else:
                 _LOGGER.warning("Unsupported data type for writing: %s", entity.data_type)

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "python-qube-heatpump"
-version = "1.4.1"
+version = "1.4.2"
 authors = [
   { name="MattieGit", email="6250046+MattieGit@users.noreply.github.com" },
 ]
@@ -17,7 +17,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "pymodbus>=3.6.0",
+    "pymodbus>=3.11.0",
 ]
 
 [project.optional-dependencies]
