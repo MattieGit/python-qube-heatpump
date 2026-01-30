@@ -66,3 +66,34 @@ def test_entity_def_is_frozen():
     )
     with pytest.raises(AttributeError):
         entity.key = "changed"
+
+
+def test_binary_sensor_definitions_exist():
+    """Test binary sensor definitions are available."""
+    from python_qube_heatpump.entities.binary_sensors import BINARY_SENSORS
+
+    # Check we have binary sensors
+    assert len(BINARY_SENSORS) > 0
+
+    # Check a specific one
+    assert "dout_srcpmp_val" in BINARY_SENSORS
+    entity = BINARY_SENSORS["dout_srcpmp_val"]
+    assert entity.platform == Platform.BINARY_SENSOR
+    assert entity.input_type == InputType.DISCRETE_INPUT
+    assert entity.address == 0
+
+
+def test_all_binary_sensors_have_required_fields():
+    """Test all binary sensors have required fields."""
+    from python_qube_heatpump.entities.binary_sensors import BINARY_SENSORS
+
+    for key, entity in BINARY_SENSORS.items():
+        assert entity.key == key, f"Key mismatch for {key}"
+        assert entity.name, f"Missing name for {key}"
+        assert entity.platform == Platform.BINARY_SENSOR, f"Wrong platform for {key}"
+        assert entity.input_type in (
+            InputType.DISCRETE_INPUT,
+            InputType.COIL,
+            InputType.HOLDING_REGISTER,
+            InputType.INPUT_REGISTER,
+        ), f"Invalid input_type for {key}"
