@@ -127,3 +127,33 @@ def test_all_sensors_have_required_fields():
         assert entity.name, f"Missing name for {key}"
         assert entity.platform == Platform.SENSOR, f"Wrong platform for {key}"
         assert entity.data_type is not None, f"Missing data_type for {key}"
+
+
+def test_switch_definitions_exist():
+    """Test switch definitions are available."""
+    from python_qube_heatpump.entities.switches import SWITCHES
+
+    assert len(SWITCHES) > 0
+
+    # Check core switches exist
+    assert "bms_summerwinter" in SWITCHES
+    assert "modbus_demand" in SWITCHES
+    assert "bms_sgready_a" in SWITCHES
+
+    # Verify a switch's properties
+    switch = SWITCHES["bms_summerwinter"]
+    assert switch.platform == Platform.SWITCH
+    assert switch.input_type == InputType.COIL
+    assert switch.writable is True
+
+
+def test_all_switches_have_required_fields():
+    """Test all switches have required fields."""
+    from python_qube_heatpump.entities.switches import SWITCHES
+
+    for key, entity in SWITCHES.items():
+        assert entity.key == key, f"Key mismatch for {key}"
+        assert entity.name, f"Missing name for {key}"
+        assert entity.platform == Platform.SWITCH, f"Wrong platform for {key}"
+        assert entity.input_type == InputType.COIL, f"Wrong input_type for {key}"
+        assert entity.writable is True, f"Switch {key} should be writable"
