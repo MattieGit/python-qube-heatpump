@@ -1,12 +1,16 @@
 """Client for Qube Heat Pump."""
 
+from __future__ import annotations
+
 import logging
 import struct
-from typing import Optional
+from typing import Any
 
 from pymodbus.client import AsyncModbusTcpClient
 
 from . import const
+from .entities import BINARY_SENSORS, SENSORS, SWITCHES, EntityDef
+from .entities.base import DataType, InputType
 from .models import QubeState
 
 _LOGGER = logging.getLogger(__name__)
@@ -156,3 +160,161 @@ class QubeClient:
         except Exception as e:
             _LOGGER.error("Exception reading address %s: %s", address, e)
             return None
+
+    async def read_entity(self, entity: EntityDef) -> Any:
+        """Read a single entity value based on EntityDef.
+
+        Args:
+            entity: The entity definition to read.
+
+        Returns:
+            The read value (float, int, or bool depending on entity type).
+        """
+        # Determine register count based on data type
+        if entity.data_type in (DataType.FLOAT32, DataType.UINT32, DataType.INT32):
+            count = 2
+        else:
+            count = 1
+
+        try:
+            # Read based on input type
+            if entity.input_type == InputType.COIL:
+                result = await self._client.read_coils(
+                    entity.address, count=1, slave=self.unit
+                )
+                if result.isError():
+                    _LOGGER.warning("Error reading coil %s", entity.address)
+                    return None
+                return bool(result.bits[0])
+
+            if entity.input_type == InputType.DISCRETE_INPUT:
+                result = await self._client.read_discrete_inputs(
+                    entity.address, count=1, slave=self.unit
+                )
+                if result.isError():
+                    _LOGGER.warning("Error reading discrete input %s", entity.address)
+                    return None
+                return bool(result.bits[0])
+
+            if entity.input_type == InputType.INPUT_REGISTER:
+                result = await self._client.read_input_registers(
+                    entity.address, count, slave=self.unit
+                )
+            else:  # HOLDING_REGISTER
+                result = await self._client.read_holding_registers(
+                    entity.address, count, slave=self.unit
+                )
+
+            if result.isError():
+                _LOGGER.warning("Error reading address %s", entity.address)
+                return None
+
+            regs = result.registers
+            val: float | int = 0
+
+            # Decode based on data type
+            if entity.data_type == DataType.FLOAT32:
+                int_val = (regs[1] << 16) | regs[0]
+                val = struct.unpack(">f", struct.pack(">I", int_val))[0]
+            elif entity.data_type == DataType.INT16:
+                val = regs[0]
+                if val > 32767:
+                    val -= 65536
+            elif entity.data_type == DataType.UINT16:
+                val = regs[0]
+            elif entity.data_type == DataType.UINT32:
+                val = (regs[1] << 16) | regs[0]
+            elif entity.data_type == DataType.INT32:
+                val = (regs[1] << 16) | regs[0]
+                if val > 2147483647:
+                    val -= 4294967296
+
+            # Apply scale and offset
+            if entity.scale is not None:
+                val = val * entity.scale
+            if entity.offset is not None:
+                val = val + entity.offset
+
+            return val
+
+        except Exception as e:
+            _LOGGER.error("Exception reading entity %s: %s", entity.key, e)
+            return None
+
+    async def read_sensor(self, key: str) -> float | int | None:
+        """Read a sensor value by key.
+
+        Args:
+            key: The sensor key (e.g., 'temp_supply').
+
+        Returns:
+            The sensor value, or None if not found or error.
+        """
+        entity = SENSORS.get(key)
+        if entity is None:
+            _LOGGER.warning("Unknown sensor key: %s", key)
+            return None
+        return await self.read_entity(entity)
+
+    async def read_binary_sensor(self, key: str) -> bool | None:
+        """Read a binary sensor value by key.
+
+        Args:
+            key: The binary sensor key (e.g., 'dout_srcpmp_val').
+
+        Returns:
+            The binary sensor value, or None if not found or error.
+        """
+        entity = BINARY_SENSORS.get(key)
+        if entity is None:
+            _LOGGER.warning("Unknown binary sensor key: %s", key)
+            return None
+        return await self.read_entity(entity)
+
+    async def read_switch(self, key: str) -> bool | None:
+        """Read a switch state by key.
+
+        Args:
+            key: The switch key (e.g., 'bms_summerwinter').
+
+        Returns:
+            The switch state, or None if not found or error.
+        """
+        entity = SWITCHES.get(key)
+        if entity is None:
+            _LOGGER.warning("Unknown switch key: %s", key)
+            return None
+        return await self.read_entity(entity)
+
+    async def read_all_sensors(self) -> dict[str, Any]:
+        """Read all sensor values.
+
+        Returns:
+            Dictionary mapping sensor keys to their values.
+        """
+        result: dict[str, Any] = {}
+        for key, entity in SENSORS.items():
+            result[key] = await self.read_entity(entity)
+        return result
+
+    async def read_all_binary_sensors(self) -> dict[str, bool | None]:
+        """Read all binary sensor values.
+
+        Returns:
+            Dictionary mapping binary sensor keys to their values.
+        """
+        result: dict[str, bool | None] = {}
+        for key, entity in BINARY_SENSORS.items():
+            result[key] = await self.read_entity(entity)
+        return result
+
+    async def read_all_switches(self) -> dict[str, bool | None]:
+        """Read all switch states.
+
+        Returns:
+            Dictionary mapping switch keys to their states.
+        """
+        result: dict[str, bool | None] = {}
+        for key, entity in SWITCHES.items():
+            result[key] = await self.read_entity(entity)
+        return result
