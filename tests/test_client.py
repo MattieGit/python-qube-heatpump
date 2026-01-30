@@ -161,3 +161,63 @@ async def test_read_switch_unknown_key(mock_modbus_client):
     client = QubeClient("1.2.3.4", 502)
     result = await client.read_switch("unknown_switch")
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_write_switch(mock_modbus_client):
+    """Test writing a switch."""
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+
+    mock_resp = MagicMock()
+    mock_resp.isError.return_value = False
+
+    mock_instance.write_coil = AsyncMock(return_value=mock_resp)
+    client._client = mock_instance
+
+    result = await client.write_switch("bms_summerwinter", True)
+    assert result is True
+    mock_instance.write_coil.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_write_switch_unknown_key(mock_modbus_client):
+    """Test writing a switch with unknown key returns False."""
+    client = QubeClient("1.2.3.4", 502)
+    result = await client.write_switch("unknown_switch", True)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_write_setpoint(mock_modbus_client):
+    """Test writing a setpoint value."""
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+
+    mock_resp = MagicMock()
+    mock_resp.isError.return_value = False
+
+    mock_instance.write_registers = AsyncMock(return_value=mock_resp)
+    client._client = mock_instance
+
+    # setpoint_dhw is writable
+    result = await client.write_setpoint("setpoint_dhw", 55.0)
+    assert result is True
+    mock_instance.write_registers.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_write_setpoint_non_writable(mock_modbus_client):
+    """Test writing a non-writable sensor returns False."""
+    client = QubeClient("1.2.3.4", 502)
+    # temp_supply is not writable
+    result = await client.write_setpoint("temp_supply", 35.0)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_write_setpoint_unknown_key(mock_modbus_client):
+    """Test writing a setpoint with unknown key returns False."""
+    client = QubeClient("1.2.3.4", 502)
+    result = await client.write_setpoint("unknown_sensor", 50.0)
+    assert result is False

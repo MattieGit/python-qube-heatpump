@@ -318,3 +318,97 @@ class QubeClient:
         for key, entity in SWITCHES.items():
             result[key] = await self.read_entity(entity)
         return result
+
+    async def write_switch(self, key: str, value: bool) -> bool:
+        """Write a switch state by key.
+
+        Args:
+            key: The switch key (e.g., 'bms_summerwinter').
+            value: True to turn on, False to turn off.
+
+        Returns:
+            True if write succeeded, False otherwise.
+        """
+        entity = SWITCHES.get(key)
+        if entity is None:
+            _LOGGER.warning("Unknown switch key: %s", key)
+            return False
+
+        if not entity.writable:
+            _LOGGER.warning("Switch %s is not writable", key)
+            return False
+
+        try:
+            result = await self._client.write_coil(
+                entity.address, value, slave=self.unit
+            )
+            if result.isError():
+                _LOGGER.warning("Error writing switch %s", key)
+                return False
+            return True
+        except Exception as e:
+            _LOGGER.error("Exception writing switch %s: %s", key, e)
+            return False
+
+    async def write_setpoint(self, key: str, value: float) -> bool:
+        """Write a setpoint value by key.
+
+        Args:
+            key: The sensor key for the setpoint (e.g., 'setpoint_dhw').
+            value: The value to write.
+
+        Returns:
+            True if write succeeded, False otherwise.
+        """
+        entity = SENSORS.get(key)
+        if entity is None:
+            _LOGGER.warning("Unknown sensor key: %s", key)
+            return False
+
+        if not entity.writable:
+            _LOGGER.warning("Sensor %s is not writable", key)
+            return False
+
+        if entity.input_type != InputType.HOLDING_REGISTER:
+            _LOGGER.warning("Sensor %s is not a holding register", key)
+            return False
+
+        try:
+            # Reverse scale/offset if needed
+            write_value = value
+            if entity.offset is not None:
+                write_value = write_value - entity.offset
+            if entity.scale is not None:
+                write_value = write_value / entity.scale
+
+            # Encode based on data type
+            if entity.data_type == DataType.FLOAT32:
+                # Pack as big-endian float, then split into two registers
+                packed = struct.pack(">f", write_value)
+                int_val = struct.unpack(">I", packed)[0]
+                regs = [int_val & 0xFFFF, (int_val >> 16) & 0xFFFF]
+                result = await self._client.write_registers(
+                    entity.address, regs, slave=self.unit
+                )
+            elif entity.data_type == DataType.INT16:
+                if write_value < 0:
+                    write_value = int(write_value) + 65536
+                result = await self._client.write_register(
+                    entity.address, int(write_value), slave=self.unit
+                )
+            elif entity.data_type == DataType.UINT16:
+                result = await self._client.write_register(
+                    entity.address, int(write_value), slave=self.unit
+                )
+            else:
+                _LOGGER.warning("Unsupported data type for writing: %s", entity.data_type)
+                return False
+
+            if result.isError():
+                _LOGGER.warning("Error writing setpoint %s", key)
+                return False
+            return True
+
+        except Exception as e:
+            _LOGGER.error("Exception writing setpoint %s: %s", key, e)
+            return False
