@@ -217,11 +217,6 @@ class QubeClient:
         else:
             count = 1
 
-        _LOGGER.debug(
-            "read_entity: key=%s addr=%s input_type=%s data_type=%s count=%s",
-            entity.key, entity.address, entity.input_type, data_type_str, count
-        )
-
         try:
             # Read based on input type (use string comparison for safety)
             input_type_str = entity.input_type.value if entity.input_type else None
@@ -260,19 +255,11 @@ class QubeClient:
             regs = result.registers
             val: float | int = 0
 
-            _LOGGER.debug(
-                "read_entity: key=%s raw_regs=%s", entity.key, regs
-            )
-
             # Decode based on data type (use string comparison for safety)
             # Qube uses big endian word order (ABCD): regs[0]=MSW, regs[1]=LSW
             if data_type_str == "float32":
                 int_val = (regs[0] << 16) | regs[1]
                 val = struct.unpack(">f", struct.pack(">I", int_val))[0]
-                _LOGGER.debug(
-                    "read_entity: key=%s float32 int_val=%s decoded=%s",
-                    entity.key, int_val, val
-                )
             elif data_type_str == "int16":
                 val = regs[0]
                 if val > 32767:
@@ -293,11 +280,6 @@ class QubeClient:
                 val = val * entity.scale
             if entity.offset is not None:
                 val = val + entity.offset
-
-            _LOGGER.debug(
-                "read_entity: key=%s final_value=%s (scale=%s, offset=%s)",
-                entity.key, val, entity.scale, entity.offset
-            )
 
             return val
 
