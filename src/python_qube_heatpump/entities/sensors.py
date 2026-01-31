@@ -122,8 +122,7 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
         data_type=DataType.FLOAT32,
         platform=Platform.SENSOR,
         unit="%",
-        scale=-100.0,
-        offset=100.0,
+        scale=100.0,
     ),
     EntityDef(
         key="aout_srcpmp_val",
@@ -133,8 +132,7 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
         data_type=DataType.FLOAT32,
         platform=Platform.SENSOR,
         unit="%",
-        scale=-100.0,
-        offset=100.0,
+        scale=100.0,
     ),
     EntityDef(
         key="aout_srcvalve_val",
