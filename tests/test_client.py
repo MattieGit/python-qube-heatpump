@@ -24,13 +24,12 @@ async def test_read_value(mock_modbus_client):
     mock_instance.connected = True
 
     # Mock response for reading holding registers (FLOAT32)
-    # 24.5 = 0x41C40000 -> 16836 (0x41C4), 0 (0x0000) (Big Endian)
-    # Our decoder expects [0, 16836] for Little Endian Word Order?
-    # Logic in client.py: int_val = (regs[1] << 16) | regs[0]
-    # To get 0x41C40000: regs[1]=0x41C4, regs[0]=0x0000
+    # 24.5 = 0x41C40000 -> Big Endian word order (ABCD)
+    # Logic in client.py: int_val = (regs[0] << 16) | regs[1]
+    # regs[0]=0x41C4=16836 (MSW), regs[1]=0x0000=0 (LSW)
     mock_resp = MagicMock()
     mock_resp.isError.return_value = False
-    mock_resp.registers = [0, 16836]
+    mock_resp.registers = [16836, 0]
 
     mock_instance.read_holding_registers = AsyncMock(return_value=mock_resp)
     client._client = mock_instance
@@ -80,10 +79,11 @@ async def test_read_sensor(mock_modbus_client):
     mock_instance = mock_modbus_client.return_value
 
     # Mock response for temp_supply (FLOAT32) = 35.5°C
-    # 35.5 = 0x420E0000 -> regs[1]=0x420E=16910, regs[0]=0x0000
+    # 35.5 = 0x420E0000 -> Big Endian word order (ABCD)
+    # regs[0]=0x420E=16910 (MSW), regs[1]=0x0000=0 (LSW)
     mock_resp = MagicMock()
     mock_resp.isError.return_value = False
-    mock_resp.registers = [0, 16910]
+    mock_resp.registers = [16910, 0]
 
     mock_instance.read_input_registers = AsyncMock(return_value=mock_resp)
     client._client = mock_instance
