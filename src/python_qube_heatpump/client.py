@@ -448,7 +448,9 @@ class QubeClient:
                     entity.address, int(write_value), device_id=self.unit
                 )
             else:
-                _LOGGER.warning("Unsupported data type for writing: %s", entity.data_type)
+                _LOGGER.warning(
+                    "Unsupported data type for writing: %s", entity.data_type
+                )
                 return False
 
             if result.isError():
