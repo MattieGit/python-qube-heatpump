@@ -244,6 +244,7 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
         input_type=InputType.INPUT_REGISTER,
         data_type=DataType.FLOAT32,
         platform=Platform.SENSOR,
+        precision=1,
     ),
     EntityDef(
         key="power_thermic",

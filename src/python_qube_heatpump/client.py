@@ -281,6 +281,10 @@ class QubeClient:
             if entity.offset is not None:
                 val = val + entity.offset
 
+            # Apply precision rounding if specified
+            if entity.precision is not None and isinstance(val, float):
+                val = round(val, entity.precision)
+
             return val
 
         except Exception as e:
