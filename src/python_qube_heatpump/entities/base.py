@@ -75,3 +75,7 @@ class EntityDef:
     # Write capability
     writable: bool = False
     """Whether this entity can be written to."""
+
+    # Value precision
+    precision: int | None = None
+    """Number of decimal places to round to. None for no rounding."""
