@@ -84,6 +84,7 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
         data_type=DataType.FLOAT32,
         platform=Platform.SENSOR,
         unit="°C",
+        writable=True,  # User-override setpoint, bypasses heating curve
     ),
     EntityDef(
         key="usr_pid_coolsetp",
@@ -93,6 +94,7 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
         data_type=DataType.FLOAT32,
         platform=Platform.SENSOR,
         unit="°C",
+        writable=True,  # User-override setpoint, bypasses cooling curve
     ),
     EntityDef(
         key="regulation_buffersetp_max",
