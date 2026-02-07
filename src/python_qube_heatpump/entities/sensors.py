@@ -124,7 +124,6 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
         data_type=DataType.FLOAT32,
         platform=Platform.SENSOR,
         unit="%",
-        scale=100.0,
     ),
     EntityDef(
         key="aout_srcpmp_val",
@@ -134,7 +133,6 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
         data_type=DataType.FLOAT32,
         platform=Platform.SENSOR,
         unit="%",
-        scale=100.0,
     ),
     EntityDef(
         key="aout_srcvalve_val",
@@ -144,7 +142,6 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
         data_type=DataType.FLOAT32,
         platform=Platform.SENSOR,
         unit="%",
-        scale=100.0,
     ),
     EntityDef(
         key="dhw_regreq",
@@ -154,7 +151,6 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
         data_type=DataType.FLOAT32,
         platform=Platform.SENSOR,
         unit="%",
-        scale=100.0,
     ),
     EntityDef(
         key="comppwrreq",
@@ -164,7 +160,6 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
         data_type=DataType.FLOAT32,
         platform=Platform.SENSOR,
         unit="%",
-        scale=100.0,
     ),
     EntityDef(
         key="flow",
