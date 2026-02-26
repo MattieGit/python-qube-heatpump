@@ -54,7 +54,7 @@ _SWITCH_DEFS: tuple[EntityDef, ...] = (
     EntityDef(
         key="modbus_demand",
         name="Activate heat demand",
-        address=67,
+        address=19,
         input_type=InputType.COIL,
         platform=Platform.SWITCH,
         writable=True,
