@@ -294,8 +294,7 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
         input_type=InputType.INPUT_REGISTER,
         data_type=DataType.FLOAT32,
         platform=Platform.SENSOR,
-        unit="rpm",
-        scale=60.0,
+        unit="rps",
     ),
     EntityDef(
         key="dhw_setp",
