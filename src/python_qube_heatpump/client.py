@@ -105,7 +105,10 @@ class QubeClient:
         # Fetch operation sensors
         state.status_code = await _read(const.STATUS_CODE)
         state.compressor_speed = await _read(const.COMPRESSOR_SPEED)
-        state.flow_rate = await _read(const.FLOW_RATE)
+        flow_rate = await _read(const.FLOW_RATE)
+        if flow_rate is not None and flow_rate < 0:
+            flow_rate = 0.0
+        state.flow_rate = flow_rate
 
         # Fetch setpoints (holding registers)
         state.setpoint_room_heat_day = await _read(const.SETPOINT_HEAT_DAY)
