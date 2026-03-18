@@ -50,8 +50,8 @@ print(f"Address: {temp_supply.address}, Unit: {temp_supply.unit}")
 ## Vendor Documentation
 
 The official Modbus register documentation from HR-Energy is available at:
-- [docs/202506_modbus-lijst-qube.pdf](docs/202506_modbus-lijst-qube.pdf) (included in this repo)
-- [HR-Energy website](https://www.hr-energy.com/media/m4gavc0p/202506_modbus-lijst-qube.pdf)
+- [docs/modbus-lijst-qube-totaal.pdf](docs/modbus-lijst-qube-totaal.pdf) (included in this repo)
+- [HR-Energy website](https://www.hr-energy.com/media/rt4i0lmc/modbus-lijst-qube-totaal.pdf)
 
 ## Related Projects
 
