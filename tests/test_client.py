@@ -1,7 +1,9 @@
 """Test the Qube Heat Pump client."""
 
 from unittest.mock import AsyncMock, MagicMock
+
 import pytest
+
 from python_qube_heatpump import QubeClient
 
 
@@ -257,3 +259,86 @@ async def test_get_software_version_error(mock_modbus_client):
 
     result = await client.async_get_software_version()
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_ensure_connected_reconnects(mock_modbus_client):
+    """Test _ensure_connected reconnects when disconnected."""
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+    mock_instance.connect.return_value = True
+    client._client = mock_instance
+    client._connected = False
+
+    await client._ensure_connected()
+    assert client._connected is True
+    mock_instance.connect.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_ensure_connected_skips_when_connected(mock_modbus_client):
+    """Test _ensure_connected does nothing when already connected."""
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+    client._client = mock_instance
+    client._connected = True
+
+    await client._ensure_connected()
+    mock_instance.connect.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ensure_connected_backoff(mock_modbus_client):
+    """Test _ensure_connected applies exponential backoff on failure."""
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+    mock_instance.connect.return_value = False
+    client._client = mock_instance
+    client._connected = False
+
+    # First failure — backoff starts at 1s
+    await client._ensure_connected()
+    assert client._connected is False
+    assert client._backoff_seconds == 1.0
+
+    # Second failure — backoff doubles to 2s
+    client._next_connect_at = 0  # bypass wait for test
+    await client._ensure_connected()
+    assert client._backoff_seconds == 2.0
+
+
+@pytest.mark.asyncio
+async def test_ensure_connected_backoff_resets_on_success(mock_modbus_client):
+    """Test backoff resets after successful connect."""
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+    client._client = mock_instance
+    client._connected = False
+    client._backoff_seconds = 16.0
+
+    mock_instance.connect.return_value = True
+    await client._ensure_connected()
+    assert client._connected is True
+    assert client._backoff_seconds == 0.0
+
+
+@pytest.mark.asyncio
+async def test_get_all_data_auto_reconnects(mock_modbus_client):
+    """Test get_all_data calls _ensure_connected before reading."""
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+    mock_instance.connect.return_value = True
+    client._client = mock_instance
+    client._connected = False
+
+    # Mock successful register reads
+    mock_resp = MagicMock()
+    mock_resp.isError.return_value = False
+    mock_resp.registers = [0, 0]
+    mock_instance.read_input_registers = AsyncMock(return_value=mock_resp)
+    mock_instance.read_holding_registers = AsyncMock(return_value=mock_resp)
+
+    state = await client.get_all_data()
+    assert state is not None
+    # Verify connect was called (auto-reconnect happened)
+    mock_instance.connect.assert_called_once()

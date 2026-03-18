@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import struct
+import time
 from typing import Any
 
 from pymodbus.client import AsyncModbusTcpClient
@@ -26,6 +27,10 @@ class QubeClient:
         self.unit = unit_id
         self._client = AsyncModbusTcpClient(host, port=port)
         self._connected = False
+        # Backoff state
+        self._backoff_seconds: float = 0.0
+        self._backoff_max: float = 60.0
+        self._next_connect_at: float = 0.0
 
     async def connect(self) -> bool:
         """Connect to the Modbus server."""
@@ -38,16 +43,43 @@ class QubeClient:
         """Return True if connected."""
         return self._connected
 
+    async def _ensure_connected(self) -> None:
+        """Ensure connection is active, reconnecting with backoff if needed."""
+        if self._connected:
+            return
+
+        now = time.monotonic()
+        if now < self._next_connect_at:
+            return
+
+        result = await self._client.connect()
+        if result:
+            self._connected = True
+            self._backoff_seconds = 0.0
+            self._next_connect_at = 0.0
+        else:
+            self._backoff_seconds = min(
+                self._backoff_max, max(1.0, self._backoff_seconds * 2)
+            )
+            self._next_connect_at = now + self._backoff_seconds
+
     async def close(self) -> None:
         """Close connection."""
         self._client.close()
         self._connected = False
+        self._backoff_seconds = 0.0
+        self._next_connect_at = 0.0
 
-    async def get_all_data(self) -> QubeState:
+    async def get_all_data(self) -> QubeState | None:
         """Fetch all definition data and return a state object.
 
         This fetches core sensors for the official HA integration.
+        Returns None if not connected and reconnection fails.
         """
+        await self._ensure_connected()
+        if not self._connected:
+            return None
+
         state = QubeState()
 
         # Helper to read and assign
