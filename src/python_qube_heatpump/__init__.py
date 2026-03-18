@@ -17,6 +17,7 @@ from .entities import (
     SWITCHES,
 )
 from .models import QubeState
+from .network import async_get_mac_address
 
 __all__ = [
     # Client
@@ -36,4 +37,6 @@ __all__ = [
     "StatusCode",
     "STATUS_CODE_MAP",
     "get_status_code",
+    # Network
+    "async_get_mac_address",
 ]
