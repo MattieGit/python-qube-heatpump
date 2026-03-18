@@ -107,3 +107,5 @@ USER_HEAT_SETPOINT = (101, ModbusType.HOLDING, DataType.FLOAT32, None, None)
 USER_COOL_SETPOINT = (103, ModbusType.HOLDING, DataType.FLOAT32, None, None)
 MAX_SETPOINT_BUFFER = (169, ModbusType.HOLDING, DataType.FLOAT32, None, None)
 USER_DHW_SETPOINT = (173, ModbusType.HOLDING, DataType.FLOAT32, None, None)
+
+SOFTWARE_VERSION = (77, ModbusType.INPUT, DataType.FLOAT32, None, None)

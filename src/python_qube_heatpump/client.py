@@ -84,6 +84,19 @@ class QubeClient:
 
         return state
 
+    async def async_get_software_version(self) -> str | None:
+        """Read the software version from the device.
+
+        Reads InputRegister 77 (GeneralMng.Softversion).
+
+        Returns:
+            Version as string (e.g., "2.15"), or None on error.
+        """
+        value = await self.read_value(const.SOFTWARE_VERSION)
+        if value is None:
+            return None
+        return str(round(value, 2))
+
     async def get_all_entities(self) -> dict[str, Any]:
         """Fetch all entity values from library definitions.
 

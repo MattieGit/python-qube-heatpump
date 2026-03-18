@@ -221,3 +221,39 @@ async def test_write_setpoint_unknown_key(mock_modbus_client):
     client = QubeClient("1.2.3.4", 502)
     result = await client.write_setpoint("unknown_sensor", 50.0)
     assert result is False
+
+
+@pytest.mark.asyncio
+async def test_get_software_version(mock_modbus_client):
+    """Test reading software version."""
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+
+    # Mock response for version 2.15 as FLOAT32
+    # 2.15 ~ 0x4009999A -> regs[0]=0x4009=16393, regs[1]=0x999A=39322
+    mock_resp = MagicMock()
+    mock_resp.isError.return_value = False
+    mock_resp.registers = [16393, 39322]
+
+    mock_instance.read_input_registers = AsyncMock(return_value=mock_resp)
+    client._client = mock_instance
+
+    result = await client.async_get_software_version()
+    assert result is not None
+    assert isinstance(result, str)
+
+
+@pytest.mark.asyncio
+async def test_get_software_version_error(mock_modbus_client):
+    """Test software version returns None on error."""
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+
+    mock_resp = MagicMock()
+    mock_resp.isError.return_value = True
+
+    mock_instance.read_input_registers = AsyncMock(return_value=mock_resp)
+    client._client = mock_instance
+
+    result = await client.async_get_software_version()
+    assert result is None
