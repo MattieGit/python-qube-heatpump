@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import struct
 import time
 from typing import Any
@@ -31,6 +32,8 @@ class QubeClient:
         self._backoff_seconds: float = 0.0
         self._backoff_max: float = 60.0
         self._next_connect_at: float = 0.0
+        # Monotonic clamping for total_increasing counters
+        self._previous_values: dict[str, float] = {}
 
     async def connect(self) -> bool:
         """Connect to the Modbus server."""
@@ -117,7 +120,27 @@ class QubeClient:
         state.setpoint_room_cool_night = await _read(const.SETPOINT_COOL_NIGHT)
         state.setpoint_dhw = await _read(const.USER_DHW_SETPOINT)
 
+        self._apply_monotonic_clamping(state)
         return state
+
+    _MONOTONIC_KEYS = frozenset({"energy_total_electric", "energy_total_thermic"})
+
+    def _apply_monotonic_clamping(self, state: QubeState) -> None:
+        """Prevent total_increasing counters from reporting decreased values.
+
+        Communication glitches can cause energy counters to temporarily read
+        lower than their actual value. This clamps them to the last known
+        good value to avoid corrupting long-term statistics.
+        """
+        for key in self._MONOTONIC_KEYS:
+            current = getattr(state, key, None)
+            if current is None or not math.isfinite(current):
+                continue
+            previous = self._previous_values.get(key)
+            if previous is not None and current < previous:
+                setattr(state, key, previous)
+            else:
+                self._previous_values[key] = current
 
     async def async_get_software_version(self) -> str | None:
         """Read the software version from the device.
