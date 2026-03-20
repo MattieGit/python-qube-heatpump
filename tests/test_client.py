@@ -345,124 +345,93 @@ async def test_get_all_data_auto_reconnects(mock_modbus_client):
 
 
 @pytest.mark.asyncio
-async def test_monotonic_clamping_prevents_decrease(mock_modbus_client):
-    """Test energy counters are clamped when they decrease."""
+async def test_clamp_monotonic_basic(mock_modbus_client):
+    """Test clamp_monotonic prevents decreases."""
+    client = QubeClient("1.2.3.4", 502)
+
+    # First value establishes baseline
+    assert client.clamp_monotonic("energy", 100.0) == 100.0
+    # Increase passes through
+    assert client.clamp_monotonic("energy", 150.0) == 150.0
+    # Decrease gets clamped to previous
+    assert client.clamp_monotonic("energy", 50.0) == 150.0
+    # Recovery passes through
+    assert client.clamp_monotonic("energy", 160.0) == 160.0
+
+
+@pytest.mark.asyncio
+async def test_clamp_monotonic_none_and_nan(mock_modbus_client):
+    """Test clamp_monotonic passes through None and NaN."""
+    client = QubeClient("1.2.3.4", 502)
+
+    # None passes through
+    assert client.clamp_monotonic("energy", None) is None
+
+    # Establish baseline
+    assert client.clamp_monotonic("energy", 100.0) == 100.0
+
+    # None doesn't update cache
+    assert client.clamp_monotonic("energy", None) is None
+    assert client.monotonic_cache["energy"] == 100.0
+
+    # NaN doesn't update cache
+    result = client.clamp_monotonic("energy", float("nan"))
+    assert result != result  # NaN != NaN
+    assert client.monotonic_cache["energy"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_clamp_monotonic_independent_keys(mock_modbus_client):
+    """Test clamp_monotonic tracks keys independently."""
+    client = QubeClient("1.2.3.4", 502)
+
+    client.clamp_monotonic("electric", 100.0)
+    client.clamp_monotonic("thermic", 200.0)
+
+    # Decrease in one doesn't affect the other
+    assert client.clamp_monotonic("electric", 50.0) == 100.0
+    assert client.clamp_monotonic("thermic", 250.0) == 250.0
+
+
+@pytest.mark.asyncio
+async def test_monotonic_cache_property(mock_modbus_client):
+    """Test monotonic_cache can be get/set for persistence."""
+    client = QubeClient("1.2.3.4", 502)
+
+    # Cache starts empty
+    assert client.monotonic_cache == {}
+
+    # Set cache (e.g. restored from disk)
+    client.monotonic_cache = {"energy": 100.0, "thermic": 200.0}
+    assert client.monotonic_cache == {"energy": 100.0, "thermic": 200.0}
+
+    # Clamping uses the restored cache
+    assert client.clamp_monotonic("energy", 50.0) == 100.0
+    assert client.clamp_monotonic("thermic", 250.0) == 250.0
+
+    # Setting cache makes a copy
+    original = {"energy": 300.0}
+    client.monotonic_cache = original
+    original["energy"] = 999.0
+    assert client.monotonic_cache["energy"] == 300.0
+
+
+@pytest.mark.asyncio
+async def test_get_all_data_applies_clamping(mock_modbus_client):
+    """Test get_all_data uses clamp_monotonic for energy counters."""
     client = QubeClient("1.2.3.4", 502)
     mock_instance = mock_modbus_client.return_value
     client._client = mock_instance
     client._connected = True
 
-    # Helper to create mock responses returning specific float values
-    def make_resp(value_pairs):
-        """Create mock responses for a sequence of register reads."""
-        import struct as s
-
-        responses = []
-        for val in value_pairs:
-            resp = MagicMock()
-            resp.isError.return_value = False
-            if val is not None:
-                packed = s.pack(">f", float(val))
-                int_val = s.unpack(">I", packed)[0]
-                resp.registers = [(int_val >> 16) & 0xFFFF, int_val & 0xFFFF]
-            else:
-                resp.registers = [0, 0]
-            responses.append(resp)
-        return responses
-
-    # First call: set initial energy values (100.0 electric, 200.0 thermic)
     mock_resp = MagicMock()
     mock_resp.isError.return_value = False
     mock_resp.registers = [0, 0]
     mock_instance.read_input_registers = AsyncMock(return_value=mock_resp)
     mock_instance.read_holding_registers = AsyncMock(return_value=mock_resp)
 
-    state1 = await client.get_all_data()
-    assert state1 is not None
-    # Both should be 0.0 initially (all zeros)
-    assert state1.energy_total_electric == 0.0
-    assert state1.energy_total_thermic == 0.0
-    # Previous values should be stored
-    assert client._previous_values.get("energy_total_electric") == 0.0
-    assert client._previous_values.get("energy_total_thermic") == 0.0
-
-
-@pytest.mark.asyncio
-async def test_monotonic_clamping_unit(mock_modbus_client):
-    """Test _apply_monotonic_clamping directly."""
-    from python_qube_heatpump.models import QubeState
-
-    client = QubeClient("1.2.3.4", 502)
-
-    # First reading: establish baseline
-    state1 = QubeState()
-    state1.energy_total_electric = 100.0
-    state1.energy_total_thermic = 200.0
-    client._apply_monotonic_clamping(state1)
-    assert state1.energy_total_electric == 100.0
-    assert state1.energy_total_thermic == 200.0
-
-    # Second reading: values increase — should pass through
-    state2 = QubeState()
-    state2.energy_total_electric = 150.0
-    state2.energy_total_thermic = 250.0
-    client._apply_monotonic_clamping(state2)
-    assert state2.energy_total_electric == 150.0
-    assert state2.energy_total_thermic == 250.0
-
-    # Third reading: values decrease (glitch) — should clamp to previous
-    state3 = QubeState()
-    state3.energy_total_electric = 50.0  # Glitch: dropped below 150
-    state3.energy_total_thermic = 100.0  # Glitch: dropped below 250
-    client._apply_monotonic_clamping(state3)
-    assert state3.energy_total_electric == 150.0  # Clamped
-    assert state3.energy_total_thermic == 250.0  # Clamped
-
-    # Fourth reading: values recover — should pass through
-    state4 = QubeState()
-    state4.energy_total_electric = 160.0
-    state4.energy_total_thermic = 260.0
-    client._apply_monotonic_clamping(state4)
-    assert state4.energy_total_electric == 160.0
-    assert state4.energy_total_thermic == 260.0
-
-
-@pytest.mark.asyncio
-async def test_monotonic_clamping_skips_none(mock_modbus_client):
-    """Test clamping skips None values."""
-    from python_qube_heatpump.models import QubeState
-
-    client = QubeClient("1.2.3.4", 502)
-
-    # Establish baseline
-    state1 = QubeState()
-    state1.energy_total_electric = 100.0
-    state1.energy_total_thermic = 200.0
-    client._apply_monotonic_clamping(state1)
-
-    # None value should be skipped (not clamped, not stored)
-    state2 = QubeState()
-    state2.energy_total_electric = None
-    state2.energy_total_thermic = 200.0
-    client._apply_monotonic_clamping(state2)
-    assert state2.energy_total_electric is None  # Unchanged
-    assert client._previous_values["energy_total_electric"] == 100.0  # Not updated
-
-
-@pytest.mark.asyncio
-async def test_monotonic_clamping_skips_nan(mock_modbus_client):
-    """Test clamping skips NaN values."""
-    from python_qube_heatpump.models import QubeState
-
-    client = QubeClient("1.2.3.4", 502)
-
-    # Establish baseline
-    state1 = QubeState()
-    state1.energy_total_electric = 100.0
-    client._apply_monotonic_clamping(state1)
-
-    # NaN should be skipped
-    state2 = QubeState()
-    state2.energy_total_electric = float("nan")
-    client._apply_monotonic_clamping(state2)
-    assert client._previous_values["energy_total_electric"] == 100.0
+    state = await client.get_all_data()
+    assert state is not None
+    # Energy values stored in cache
+    assert client.monotonic_cache.get("energy_total_electric") == 0.0
+    assert client.monotonic_cache.get("energy_total_thermic") == 0.0

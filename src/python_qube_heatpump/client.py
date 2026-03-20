@@ -33,7 +33,7 @@ class QubeClient:
         self._backoff_max: float = 60.0
         self._next_connect_at: float = 0.0
         # Monotonic clamping for total_increasing counters
-        self._previous_values: dict[str, float] = {}
+        self._monotonic_cache: dict[str, float] = {}
 
     async def connect(self) -> bool:
         """Connect to the Modbus server."""
@@ -123,24 +123,50 @@ class QubeClient:
         self._apply_monotonic_clamping(state)
         return state
 
+    @property
+    def monotonic_cache(self) -> dict[str, float]:
+        """Return the monotonic clamping cache.
+
+        Can be used to persist/restore the cache across restarts.
+        """
+        return self._monotonic_cache
+
+    @monotonic_cache.setter
+    def monotonic_cache(self, value: dict[str, float]) -> None:
+        """Set the monotonic clamping cache (e.g. restored from disk)."""
+        self._monotonic_cache = dict(value)
+
+    def clamp_monotonic(self, key: str, value: float | None) -> float | None:
+        """Clamp a value to prevent decreases for total_increasing counters.
+
+        Returns the clamped value. If the new value is lower than the
+        previously seen value for this key, the previous value is returned.
+        None and non-finite values pass through unchanged.
+
+        Args:
+            key: Identifier for this counter (e.g. entity unique_id).
+            value: The current reading.
+
+        Returns:
+            The clamped value, or None if input was None/non-finite.
+        """
+        if value is None or not math.isfinite(value):
+            return value
+        previous = self._monotonic_cache.get(key)
+        if previous is not None and value < previous:
+            return previous
+        self._monotonic_cache[key] = value
+        return value
+
     _MONOTONIC_KEYS = frozenset({"energy_total_electric", "energy_total_thermic"})
 
     def _apply_monotonic_clamping(self, state: QubeState) -> None:
-        """Prevent total_increasing counters from reporting decreased values.
-
-        Communication glitches can cause energy counters to temporarily read
-        lower than their actual value. This clamps them to the last known
-        good value to avoid corrupting long-term statistics.
-        """
+        """Apply monotonic clamping to energy counters in a QubeState."""
         for key in self._MONOTONIC_KEYS:
             current = getattr(state, key, None)
-            if current is None or not math.isfinite(current):
-                continue
-            previous = self._previous_values.get(key)
-            if previous is not None and current < previous:
-                setattr(state, key, previous)
-            else:
-                self._previous_values[key] = current
+            clamped = self.clamp_monotonic(key, current)
+            if clamped is not current:
+                setattr(state, key, clamped)
 
     async def async_get_software_version(self) -> str | None:
         """Read the software version from the device.
