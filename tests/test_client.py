@@ -356,6 +356,7 @@ async def test_monotonic_clamping_prevents_decrease(mock_modbus_client):
     def make_resp(value_pairs):
         """Create mock responses for a sequence of register reads."""
         import struct as s
+
         responses = []
         for val in value_pairs:
             resp = MagicMock()
