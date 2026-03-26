@@ -121,6 +121,13 @@ class QubeClient:
         state.setpoint_dhw = await _read(const.USER_DHW_SETPOINT)
 
         self._apply_monotonic_clamping(state)
+
+        # Fetch binary sensors
+        binary_data = await self.read_all_binary_sensors()
+        for key, value in binary_data.items():
+            if hasattr(state, key):
+                setattr(state, key, value)
+
         return state
 
     @property
