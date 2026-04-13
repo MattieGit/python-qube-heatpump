@@ -128,6 +128,9 @@ class QubeClient:
             if hasattr(state, key):
                 setattr(state, key, value)
 
+        # Compute unified status (status_code + anti-legionella override)
+        state.status = const.resolve_status(state.status_code, state.req_antileg_1)
+
         return state
 
     @property

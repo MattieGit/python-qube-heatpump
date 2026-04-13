@@ -7,6 +7,7 @@ from .const import (
     StatusCode,
     STATUS_CODE_MAP,
     get_status_code,
+    resolve_status,
 )
 from .entities import (
     BINARY_SENSORS,
@@ -37,6 +38,7 @@ __all__ = [
     "StatusCode",
     "STATUS_CODE_MAP",
     "get_status_code",
+    "resolve_status",
     # Network
     "async_get_mac_address",
 ]
