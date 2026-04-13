@@ -4,6 +4,7 @@ from python_qube_heatpump.const import (
     StatusCode,
     STATUS_CODE_MAP,
     get_status_code,
+    resolve_status,
 )
 
 
@@ -55,3 +56,30 @@ def test_get_status_code_unknown():
     assert get_status_code(0) == StatusCode.UNKNOWN
     assert get_status_code(99) == StatusCode.UNKNOWN
     assert get_status_code(-1) == StatusCode.UNKNOWN
+
+
+def test_resolve_status_without_antileg():
+    """Without anti-legionella active, resolve_status follows the code map."""
+    assert resolve_status(16, False) == StatusCode.HEATING
+    assert resolve_status(22, False) == StatusCode.HEATING_DHW
+    assert resolve_status(1, None) == StatusCode.STANDBY
+
+
+def test_resolve_status_antileg_overrides_normal_statuses():
+    """Anti-legionella overrides every non-alarm status."""
+    assert resolve_status(16, True) == StatusCode.ANTI_LEGIONELLA
+    assert resolve_status(22, True) == StatusCode.ANTI_LEGIONELLA
+    assert resolve_status(1, True) == StatusCode.ANTI_LEGIONELLA
+    assert resolve_status(99, True) == StatusCode.ANTI_LEGIONELLA
+
+
+def test_resolve_status_alarm_not_masked_by_antileg():
+    """ALARM must not be masked by anti-legionella."""
+    assert resolve_status(2, True) == StatusCode.ALARM
+
+
+def test_resolve_status_none_code():
+    """None code resolves to UNKNOWN (or ANTI_LEGIONELLA if active)."""
+    assert resolve_status(None, False) == StatusCode.UNKNOWN
+    assert resolve_status(None, None) == StatusCode.UNKNOWN
+    assert resolve_status(None, True) == StatusCode.ANTI_LEGIONELLA

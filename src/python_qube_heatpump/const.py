@@ -32,6 +32,7 @@ class StatusCode(str, Enum):
     HEATING = "heating"
     START_FAIL = "start_fail"
     HEATING_DHW = "heating_dhw"
+    ANTI_LEGIONELLA = "anti_legionella"
     UNKNOWN = "unknown"
 
 
@@ -54,6 +55,33 @@ STATUS_CODE_MAP: dict[int, StatusCode] = {
 def get_status_code(code: int) -> StatusCode:
     """Convert numeric status code to StatusCode enum."""
     return STATUS_CODE_MAP.get(code, StatusCode.UNKNOWN)
+
+
+def resolve_status(code: int | None, antileg_active: bool | None) -> StatusCode:
+    """Resolve the unified heat pump status.
+
+    Combines the raw status code with the anti-legionella signal so consumers
+    receive a single status value. When anti-legionella is active the heat
+    pump is running a special DHW cycle that is otherwise hidden behind the
+    regular ``HEATING_DHW`` code; surfacing it as its own status makes the
+    device state visible without a separate binary sensor.
+
+    ``ALARM`` always takes precedence over anti-legionella: safety signals
+    must not be masked by normal operational modes.
+
+    Args:
+        code: Raw numeric status code from register 38, or ``None`` when
+            unavailable.
+        antileg_active: Current value of the anti-legionella discrete input
+            (``req_antileg_1``), or ``None`` when unavailable.
+
+    Returns:
+        The resolved :class:`StatusCode` value.
+    """
+    status = get_status_code(code) if code is not None else StatusCode.UNKNOWN
+    if antileg_active and status is not StatusCode.ALARM:
+        return StatusCode.ANTI_LEGIONELLA
+    return status
 
 
 # Register definitions (Address, Type, Data Type, Scale, Offset)

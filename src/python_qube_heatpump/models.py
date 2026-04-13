@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+from .const import StatusCode
+
 
 @dataclass
 class QubeState:
@@ -30,6 +32,9 @@ class QubeState:
 
     # Operation
     status_code: int | None = None
+    # Unified status combining status_code with req_antileg_1 override.
+    # Computed by QubeClient.get_all_data(); see const.resolve_status().
+    status: StatusCode | None = None
     compressor_speed: float | None = None
     flow_rate: float | None = None
 
