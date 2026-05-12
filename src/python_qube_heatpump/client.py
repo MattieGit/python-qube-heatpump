@@ -119,6 +119,11 @@ class QubeClient:
         state.setpoint_room_cool_day = await _read(const.SETPOINT_COOL_DAY)
         state.setpoint_room_cool_night = await _read(const.SETPOINT_COOL_NIGHT)
         state.setpoint_dhw = await _read(const.USER_DHW_SETPOINT)
+        state.usr_pid_heatsetp = await _read(const.USER_HEAT_SETPOINT)
+        state.usr_pid_coolsetp = await _read(const.USER_COOL_SETPOINT)
+
+        # LinQ thermostat room temperature (optional)
+        state.modbus_roomtemp = await _read(const.TEMP_ROOM_MODBUS)
 
         self._apply_monotonic_clamping(state)
 

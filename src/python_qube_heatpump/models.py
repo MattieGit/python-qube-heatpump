@@ -44,6 +44,11 @@ class QubeState:
     setpoint_room_cool_day: float | None = None
     setpoint_room_cool_night: float | None = None
     setpoint_dhw: float | None = None
+    usr_pid_heatsetp: float | None = None
+    usr_pid_coolsetp: float | None = None
+
+    # LinQ thermostat room temperature (optional, not all installations have LinQ)
+    modbus_roomtemp: float | None = None
 
     # Binary sensors - Outputs
     dout_srcpmp_val: bool | None = None
