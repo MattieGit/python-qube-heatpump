@@ -512,6 +512,47 @@ class QubeClient:
             _LOGGER.error("Exception writing switch %s: %s", key, e)
             return False
 
+    # SG Ready mode API
+    SG_READY_MODES = ("off", "block", "plus", "max")
+    _SGREADY_MODE_TO_BITS: dict[str, tuple[bool, bool]] = {
+        "off": (False, False),
+        "block": (True, False),
+        "plus": (False, True),
+        "max": (True, True),
+    }
+    _SGREADY_BITS_TO_MODE: dict[tuple[bool, bool], str] = {
+        v: k for k, v in _SGREADY_MODE_TO_BITS.items()
+    }
+
+    async def get_sg_ready_mode(self) -> str | None:
+        """Read the current SG Ready mode.
+
+        Returns:
+            Mode string ("off", "block", "plus", "max"), or None on error.
+        """
+        bit_a = await self.read_switch("bms_sgready_a")
+        bit_b = await self.read_switch("bms_sgready_b")
+        if bit_a is None or bit_b is None:
+            return None
+        return self._SGREADY_BITS_TO_MODE.get((bool(bit_a), bool(bit_b)))
+
+    async def set_sg_ready_mode(self, mode: str) -> bool:
+        """Set the SG Ready mode.
+
+        Args:
+            mode: One of "off", "block", "plus", "max".
+
+        Returns:
+            True if both writes succeeded, False otherwise.
+        """
+        bits = self._SGREADY_MODE_TO_BITS.get(mode)
+        if bits is None:
+            _LOGGER.warning("Unknown SG Ready mode: %s", mode)
+            return False
+        success_a = await self.write_switch("bms_sgready_a", bits[0])
+        success_b = await self.write_switch("bms_sgready_b", bits[1])
+        return success_a and success_b
+
     async def write_setpoint(self, key: str, value: float) -> bool:
         """Write a setpoint value by key.
 

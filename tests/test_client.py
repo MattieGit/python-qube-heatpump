@@ -435,3 +435,97 @@ async def test_get_all_data_applies_clamping(mock_modbus_client):
     # Energy values stored in cache
     assert client.monotonic_cache.get("energy_total_electric") == 0.0
     assert client.monotonic_cache.get("energy_total_thermic") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_get_sg_ready_mode(mock_modbus_client):
+    """Test reading SG Ready mode from coil bits."""
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+    client._client = mock_instance
+
+    # Mock coil reads: A=False, B=True -> "plus"
+    mock_resp_a = MagicMock()
+    mock_resp_a.isError.return_value = False
+    mock_resp_a.bits = [False]
+
+    mock_resp_b = MagicMock()
+    mock_resp_b.isError.return_value = False
+    mock_resp_b.bits = [True]
+
+    mock_instance.read_coils = AsyncMock(side_effect=[mock_resp_a, mock_resp_b])
+
+    result = await client.get_sg_ready_mode()
+    assert result == "plus"
+
+
+@pytest.mark.asyncio
+async def test_get_sg_ready_mode_all_modes(mock_modbus_client):
+    """Test all SG Ready mode combinations."""
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+    client._client = mock_instance
+
+    cases = [
+        ((False, False), "off"),
+        ((True, False), "block"),
+        ((False, True), "plus"),
+        ((True, True), "max"),
+    ]
+    for (bit_a, bit_b), expected_mode in cases:
+        resp_a = MagicMock()
+        resp_a.isError.return_value = False
+        resp_a.bits = [bit_a]
+        resp_b = MagicMock()
+        resp_b.isError.return_value = False
+        resp_b.bits = [bit_b]
+        mock_instance.read_coils = AsyncMock(side_effect=[resp_a, resp_b])
+
+        result = await client.get_sg_ready_mode()
+        assert result == expected_mode, (
+            f"Expected {expected_mode} for bits ({bit_a}, {bit_b})"
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_sg_ready_mode_read_error(mock_modbus_client):
+    """Test SG Ready mode returns None on read error."""
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+    client._client = mock_instance
+
+    mock_resp = MagicMock()
+    mock_resp.isError.return_value = True
+    mock_instance.read_coils = AsyncMock(return_value=mock_resp)
+
+    result = await client.get_sg_ready_mode()
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_set_sg_ready_mode(mock_modbus_client):
+    """Test setting SG Ready mode writes both coils."""
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+    client._client = mock_instance
+
+    mock_resp = MagicMock()
+    mock_resp.isError.return_value = False
+    mock_instance.write_coil = AsyncMock(return_value=mock_resp)
+
+    result = await client.set_sg_ready_mode("plus")
+    assert result is True
+
+    # "plus" = (False, True) -> A=False, B=True
+    calls = mock_instance.write_coil.call_args_list
+    assert len(calls) == 2
+    assert calls[0].args == (65, False)  # bms_sgready_a address
+    assert calls[1].args == (66, True)  # bms_sgready_b address
+
+
+@pytest.mark.asyncio
+async def test_set_sg_ready_mode_unknown(mock_modbus_client):
+    """Test setting unknown SG Ready mode returns False."""
+    client = QubeClient("1.2.3.4", 502)
+    result = await client.set_sg_ready_mode("turbo")
+    assert result is False
