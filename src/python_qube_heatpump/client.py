@@ -192,9 +192,9 @@ class QubeClient:
             Version as string (e.g., "2.15"), or None on error.
         """
         value = await self.read_value(const.SOFTWARE_VERSION)
-        if value is None or value == 0.0:
+        if value is None:
             return None
-        return str(round(value, 2))
+        return f"{value:.2f}"
 
     async def get_all_entities(self) -> dict[str, Any]:
         """Fetch all entity values from library definitions.
