@@ -192,7 +192,7 @@ class QubeClient:
             Version as string (e.g., "2.15"), or None on error.
         """
         value = await self.read_value(const.SOFTWARE_VERSION)
-        if value is None:
+        if value is None or value == 0.0:
             return None
         return str(round(value, 2))
 
