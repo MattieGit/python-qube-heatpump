@@ -6,6 +6,7 @@ import logging
 import math
 import struct
 import time
+from collections.abc import Iterable
 from typing import Any
 
 from pymodbus.client import AsyncModbusTcpClient
@@ -21,6 +22,14 @@ _LOGGER = logging.getLogger(__name__)
 class QubeClient:
     """Qube Modbus Client."""
 
+    # Block-read planning limits. Small address gaps within a block are
+    # read along and discarded; a failed block falls back to individual
+    # entity reads, so gap registers can never break a value.
+    _MAX_BLOCK_REGISTERS = 100  # Modbus allows at most 125 per request
+    _MAX_BLOCK_BITS = 256
+    _MAX_GAP_REGISTERS = 8
+    _MAX_GAP_BITS = 16
+
     def __init__(self, host: str, port: int = 502, unit_id: int = 1):
         """Initialize."""
         self.host = host
@@ -34,6 +43,21 @@ class QubeClient:
         self._next_connect_at: float = 0.0
         # Monotonic clamping for total_increasing counters
         self._monotonic_cache: dict[str, float] = {}
+        # Reads that already produced a WARNING (transient failures are
+        # logged once per target, then at DEBUG to avoid log spam)
+        self._read_failures_warned: set[str] = set()
+
+    def _log_read_failure(self, target: str, exc: Exception) -> None:
+        """Log a read failure: WARNING on first occurrence per target, DEBUG after.
+
+        Transient Modbus timeouts recover on the next poll cycle, so
+        repeated occurrences should not flood the log at high severity.
+        """
+        if target in self._read_failures_warned:
+            _LOGGER.debug("Exception reading %s: %s", target, exc)
+        else:
+            self._read_failures_warned.add(target)
+            _LOGGER.warning("Exception reading %s: %s", target, exc)
 
     async def connect(self) -> bool:
         """Connect to the Modbus server."""
@@ -205,33 +229,12 @@ class QubeClient:
         Returns:
             Dictionary mapping entity keys to their values.
         """
-        results: dict[str, Any] = {}
-
-        # Read all sensors
-        for key, entity in SENSORS.items():
-            try:
-                results[key] = await self.read_entity(entity)
-            except Exception as exc:
-                _LOGGER.debug("Error reading sensor %s: %s", key, exc)
-                results[key] = None
-
-        # Read all binary sensors
-        for key, entity in BINARY_SENSORS.items():
-            try:
-                results[key] = await self.read_entity(entity)
-            except Exception as exc:
-                _LOGGER.debug("Error reading binary sensor %s: %s", key, exc)
-                results[key] = None
-
-        # Read all switches
-        for key, entity in SWITCHES.items():
-            try:
-                results[key] = await self.read_entity(entity)
-            except Exception as exc:
-                _LOGGER.debug("Error reading switch %s: %s", key, exc)
-                results[key] = None
-
-        return results
+        all_entities = [
+            *SENSORS.values(),
+            *BINARY_SENSORS.values(),
+            *SWITCHES.values(),
+        ]
+        return await self.read_entities_batched(all_entities)
 
     async def read_value(self, definition: tuple) -> float | None:
         """Read a single value based on the constant definition."""
@@ -309,8 +312,140 @@ class QubeClient:
             return val
 
         except Exception as e:
-            _LOGGER.error("Exception reading address %s: %s", address, e)
+            self._log_read_failure(f"address {address}", e)
             return None
+
+    @staticmethod
+    def _register_count(entity: EntityDef) -> int:
+        """Return the number of registers an entity occupies."""
+        data_type_str = entity.data_type.value if entity.data_type else None
+        return 2 if data_type_str in ("float32", "uint32", "int32") else 1
+
+    @staticmethod
+    def _decode_registers(data_type_str: str | None, regs: list[int]) -> float | int:
+        """Decode raw registers based on data type.
+
+        Qube uses big endian word order (ABCD): regs[0]=MSW, regs[1]=LSW.
+        """
+        val: float | int = 0
+        if data_type_str == "float32":
+            int_val = (regs[0] << 16) | regs[1]
+            val = struct.unpack(">f", struct.pack(">I", int_val))[0]
+        elif data_type_str == "int16":
+            val = regs[0]
+            if val > 32767:
+                val -= 65536
+        elif data_type_str == "uint16":
+            val = regs[0]
+        elif data_type_str == "uint32":
+            int_val = (regs[0] << 16) | regs[1]
+            val = int_val
+        elif data_type_str == "int32":
+            int_val = (regs[0] << 16) | regs[1]
+            val = int_val
+            if val > 2147483647:
+                val -= 4294967296
+        return val
+
+    @staticmethod
+    def _apply_scaling(entity: EntityDef, val: float | int) -> float | int:
+        """Apply an entity's scale, offset and precision to a raw value."""
+        if entity.scale is not None:
+            val = val * entity.scale
+        if entity.offset is not None:
+            val = val + entity.offset
+        if entity.precision is not None and isinstance(val, float):
+            val = round(val, entity.precision)
+        return val
+
+    def _plan_blocks(
+        self, entities: Iterable[EntityDef]
+    ) -> list[tuple[str, int, int, list[EntityDef]]]:
+        """Group entities into contiguous block reads per input type.
+
+        Returns a list of (input_type, start_address, count, entities)
+        tuples. Entities within _MAX_GAP_* of each other share a block.
+        """
+        groups: dict[str, list[EntityDef]] = {}
+        for ent in entities:
+            input_type_str = ent.input_type.value if ent.input_type else "holding"
+            groups.setdefault(input_type_str, []).append(ent)
+
+        blocks: list[tuple[str, int, int, list[EntityDef]]] = []
+        for input_type_str, ents in groups.items():
+            is_bits = input_type_str in ("coil", "discrete_input")
+            max_gap = self._MAX_GAP_BITS if is_bits else self._MAX_GAP_REGISTERS
+            max_block = self._MAX_BLOCK_BITS if is_bits else self._MAX_BLOCK_REGISTERS
+            start: int | None = None
+            end = 0
+            members: list[EntityDef] = []
+            for ent in sorted(ents, key=lambda e: e.address):
+                count = 1 if is_bits else self._register_count(ent)
+                ent_end = ent.address + count
+                if start is None:
+                    start, end, members = ent.address, ent_end, [ent]
+                elif ent.address <= end + max_gap and ent_end - start <= max_block:
+                    end = max(end, ent_end)
+                    members.append(ent)
+                else:
+                    blocks.append((input_type_str, start, end - start, members))
+                    start, end, members = ent.address, ent_end, [ent]
+            if start is not None:
+                blocks.append((input_type_str, start, end - start, members))
+        return blocks
+
+    async def read_entities_batched(
+        self, entities: Iterable[EntityDef]
+    ) -> dict[str, Any]:
+        """Read entities using contiguous block reads.
+
+        Groups entities into a handful of Modbus block reads instead of
+        one transaction per entity. If a block read fails, its entities
+        are read individually as a fallback.
+
+        Returns:
+            Dictionary mapping entity keys to their values (None on error).
+        """
+        results: dict[str, Any] = {}
+        for input_type_str, start, count, members in self._plan_blocks(entities):
+            try:
+                if input_type_str == "coil":
+                    result = await self._client.read_coils(
+                        start, count=count, device_id=self.unit
+                    )
+                elif input_type_str == "discrete_input":
+                    result = await self._client.read_discrete_inputs(
+                        start, count=count, device_id=self.unit
+                    )
+                elif input_type_str == "input":
+                    result = await self._client.read_input_registers(
+                        start, count=count, device_id=self.unit
+                    )
+                else:  # holding
+                    result = await self._client.read_holding_registers(
+                        start, count=count, device_id=self.unit
+                    )
+                if result.isError():
+                    raise OSError(f"Modbus error response for block @{start}")
+            except Exception as exc:
+                self._log_read_failure(
+                    f"block {input_type_str}@{start} (count {count})", exc
+                )
+                for ent in members:
+                    results[ent.key] = await self.read_entity(ent)
+                continue
+
+            for ent in members:
+                offset = ent.address - start
+                if input_type_str in ("coil", "discrete_input"):
+                    results[ent.key] = bool(result.bits[offset])
+                else:
+                    reg_count = self._register_count(ent)
+                    regs = result.registers[offset : offset + reg_count]
+                    data_type_str = ent.data_type.value if ent.data_type else None
+                    val = self._decode_registers(data_type_str, regs)
+                    results[ent.key] = self._apply_scaling(ent, val)
+        return results
 
     async def read_entity(self, entity: EntityDef) -> Any:
         """Read a single entity value based on EntityDef.
@@ -324,10 +459,7 @@ class QubeClient:
         # Determine register count based on data type
         # Use string comparison to handle potential enum class differences
         data_type_str = entity.data_type.value if entity.data_type else None
-        if data_type_str in ("float32", "uint32", "int32"):
-            count = 2
-        else:
-            count = 1
+        count = self._register_count(entity)
 
         try:
             # Read based on input type (use string comparison for safety)
@@ -364,43 +496,11 @@ class QubeClient:
                 _LOGGER.warning("Error reading address %s", entity.address)
                 return None
 
-            regs = result.registers
-            val: float | int = 0
-
-            # Decode based on data type (use string comparison for safety)
-            # Qube uses big endian word order (ABCD): regs[0]=MSW, regs[1]=LSW
-            if data_type_str == "float32":
-                int_val = (regs[0] << 16) | regs[1]
-                val = struct.unpack(">f", struct.pack(">I", int_val))[0]
-            elif data_type_str == "int16":
-                val = regs[0]
-                if val > 32767:
-                    val -= 65536
-            elif data_type_str == "uint16":
-                val = regs[0]
-            elif data_type_str == "uint32":
-                int_val = (regs[0] << 16) | regs[1]
-                val = int_val
-            elif data_type_str == "int32":
-                int_val = (regs[0] << 16) | regs[1]
-                val = int_val
-                if val > 2147483647:
-                    val -= 4294967296
-
-            # Apply scale and offset
-            if entity.scale is not None:
-                val = val * entity.scale
-            if entity.offset is not None:
-                val = val + entity.offset
-
-            # Apply precision rounding if specified
-            if entity.precision is not None and isinstance(val, float):
-                val = round(val, entity.precision)
-
-            return val
+            val = self._decode_registers(data_type_str, result.registers)
+            return self._apply_scaling(entity, val)
 
         except Exception as e:
-            _LOGGER.error("Exception reading entity %s: %s", entity.key, e)
+            self._log_read_failure(f"entity {entity.key}", e)
             return None
 
     async def read_sensor(self, key: str) -> float | int | None:
