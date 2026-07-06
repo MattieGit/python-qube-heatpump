@@ -529,3 +529,54 @@ async def test_set_sg_ready_mode_unknown(mock_modbus_client):
     client = QubeClient("1.2.3.4", 502)
     result = await client.set_sg_ready_mode("turbo")
     assert result is False
+
+
+@pytest.mark.asyncio
+async def test_read_entity_failure_logs_warning_once_then_debug(
+    mock_modbus_client, caplog
+):
+    """Transient read failures log WARNING on first occurrence, DEBUG after."""
+    import logging
+
+    from python_qube_heatpump.entities import BINARY_SENSORS
+
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+    mock_instance.read_discrete_inputs = AsyncMock(
+        side_effect=OSError("No response received after 3 retries")
+    )
+    client._client = mock_instance
+
+    entity = BINARY_SENSORS["dout_srcpmp_val"]
+
+    with caplog.at_level(logging.DEBUG, logger="python_qube_heatpump.client"):
+        assert await client.read_entity(entity) is None
+        assert await client.read_entity(entity) is None
+
+    records = [r for r in caplog.records if "dout_srcpmp_val" in r.getMessage()]
+    assert len(records) == 2
+    assert records[0].levelno == logging.WARNING
+    assert records[1].levelno == logging.DEBUG
+    assert not any(r.levelno == logging.ERROR for r in records)
+
+
+@pytest.mark.asyncio
+async def test_read_entity_warns_again_per_entity(mock_modbus_client, caplog):
+    """The warn-once tracking is per entity, not global."""
+    import logging
+
+    from python_qube_heatpump.entities import BINARY_SENSORS
+
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+    mock_instance.read_discrete_inputs = AsyncMock(
+        side_effect=OSError("No response received after 3 retries")
+    )
+    client._client = mock_instance
+
+    with caplog.at_level(logging.DEBUG, logger="python_qube_heatpump.client"):
+        await client.read_entity(BINARY_SENSORS["dout_srcpmp_val"])
+        await client.read_entity(BINARY_SENSORS["dout_usrpmp_val"])
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 2
