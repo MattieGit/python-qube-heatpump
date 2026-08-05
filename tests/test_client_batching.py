@@ -172,3 +172,43 @@ async def test_get_all_entities_uses_batched_reads(mock_modbus_client):
         + mock_instance.read_holding_registers.call_count
     )
     assert total_calls <= 15
+
+
+@pytest.mark.asyncio
+async def test_get_all_data_uses_batched_reads(mock_modbus_client):
+    """get_all_data (used by HA core, polled every 15s) reads via block reads.
+
+    Previously get_all_data() performed one Modbus transaction per field
+    (~59 transactions: 23 core sensors + 37 binary sensors). It should now
+    use the same batched block-read infrastructure as get_all_entities(),
+    landing in a handful of transactions instead.
+    """
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+
+    def _bits(address, count=1, **kwargs):
+        return _bit_response([False] * count)
+
+    def _regs(address, count=1, **kwargs):
+        return _register_response([0] * count)
+
+    mock_instance.read_coils = AsyncMock(side_effect=_bits)
+    mock_instance.read_discrete_inputs = AsyncMock(side_effect=_bits)
+    mock_instance.read_input_registers = AsyncMock(side_effect=_regs)
+    mock_instance.read_holding_registers = AsyncMock(side_effect=_regs)
+    client._client = mock_instance
+    client._connected = True
+
+    state = await client.get_all_data()
+
+    assert state is not None
+    total_calls = (
+        mock_instance.read_coils.call_count
+        + mock_instance.read_discrete_inputs.call_count
+        + mock_instance.read_input_registers.call_count
+        + mock_instance.read_holding_registers.call_count
+    )
+    # Old per-register/per-entity path made ~59 transactions (23 core
+    # fields + 37 binary sensors). Batched block reads should collapse
+    # this into a handful of transactions.
+    assert total_calls <= 15

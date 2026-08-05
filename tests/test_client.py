@@ -331,12 +331,18 @@ async def test_get_all_data_auto_reconnects(mock_modbus_client):
     client._client = mock_instance
     client._connected = False
 
-    # Mock successful register reads
-    mock_resp = MagicMock()
-    mock_resp.isError.return_value = False
-    mock_resp.registers = [0, 0]
-    mock_instance.read_input_registers = AsyncMock(return_value=mock_resp)
-    mock_instance.read_holding_registers = AsyncMock(return_value=mock_resp)
+    # Mock successful register reads. Batched block reads request a
+    # variable number of registers per block, so the mock must honor the
+    # requested `count` (a real Modbus server would too), unlike a fixed
+    # 2-register response.
+    def _resp(address, count=1, **kwargs):
+        resp = MagicMock()
+        resp.isError.return_value = False
+        resp.registers = [0] * count
+        return resp
+
+    mock_instance.read_input_registers = AsyncMock(side_effect=_resp)
+    mock_instance.read_holding_registers = AsyncMock(side_effect=_resp)
 
     state = await client.get_all_data()
     assert state is not None
@@ -424,11 +430,16 @@ async def test_get_all_data_applies_clamping(mock_modbus_client):
     client._client = mock_instance
     client._connected = True
 
-    mock_resp = MagicMock()
-    mock_resp.isError.return_value = False
-    mock_resp.registers = [0, 0]
-    mock_instance.read_input_registers = AsyncMock(return_value=mock_resp)
-    mock_instance.read_holding_registers = AsyncMock(return_value=mock_resp)
+    # Batched block reads request a variable `count` of registers per
+    # block, so the mock must honor it (a real Modbus server would too).
+    def _resp(address, count=1, **kwargs):
+        resp = MagicMock()
+        resp.isError.return_value = False
+        resp.registers = [0] * count
+        return resp
+
+    mock_instance.read_input_registers = AsyncMock(side_effect=_resp)
+    mock_instance.read_holding_registers = AsyncMock(side_effect=_resp)
 
     state = await client.get_all_data()
     assert state is not None
