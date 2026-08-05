@@ -18,6 +18,112 @@ from .models import QubeState
 
 _LOGGER = logging.getLogger(__name__)
 
+# Entities read by get_all_data() (used by the official HA core integration).
+# These mirror the register definitions in `const` exactly (address, scale,
+# offset) so batching cannot change any value get_all_data() returns.
+# Note: some of these intentionally differ from the corresponding entries in
+# entities/sensors.py (e.g. compressor_speed has a x60 RPM scale here but not
+# there; cop_calc is unrounded here but rounded to 1 decimal there) — reusing
+# SENSORS would silently change get_all_data()'s output, so a dedicated table
+# is kept instead.
+# Format: (key, address, input_type, data_type, scale, offset)
+_CORE_STATE_REGISTERS: tuple[
+    tuple[str, int, InputType, DataType, float | None, float | None], ...
+] = (
+    ("temp_supply", 20, InputType.INPUT_REGISTER, DataType.FLOAT32, None, None),
+    ("temp_return", 22, InputType.INPUT_REGISTER, DataType.FLOAT32, None, None),
+    ("temp_source_in", 24, InputType.INPUT_REGISTER, DataType.FLOAT32, None, None),
+    ("temp_source_out", 26, InputType.INPUT_REGISTER, DataType.FLOAT32, None, None),
+    ("temp_room", 28, InputType.INPUT_REGISTER, DataType.FLOAT32, None, None),
+    ("temp_dhw", 30, InputType.INPUT_REGISTER, DataType.FLOAT32, None, None),
+    ("temp_outside", 32, InputType.INPUT_REGISTER, DataType.FLOAT32, None, None),
+    ("power_thermic", 36, InputType.INPUT_REGISTER, DataType.FLOAT32, None, None),
+    ("power_electric", 61, InputType.INPUT_REGISTER, DataType.FLOAT32, None, None),
+    (
+        "energy_total_electric",
+        69,
+        InputType.INPUT_REGISTER,
+        DataType.FLOAT32,
+        None,
+        None,
+    ),
+    (
+        "energy_total_thermic",
+        71,
+        InputType.INPUT_REGISTER,
+        DataType.FLOAT32,
+        None,
+        None,
+    ),
+    ("cop_calc", 34, InputType.INPUT_REGISTER, DataType.FLOAT32, None, None),
+    ("status_code", 38, InputType.INPUT_REGISTER, DataType.UINT16, None, None),
+    ("compressor_speed", 45, InputType.INPUT_REGISTER, DataType.FLOAT32, 60, None),
+    ("flow_rate", 18, InputType.INPUT_REGISTER, DataType.FLOAT32, None, None),
+    (
+        "setpoint_room_heat_day",
+        27,
+        InputType.HOLDING_REGISTER,
+        DataType.FLOAT32,
+        None,
+        None,
+    ),
+    (
+        "setpoint_room_heat_night",
+        29,
+        InputType.HOLDING_REGISTER,
+        DataType.FLOAT32,
+        None,
+        None,
+    ),
+    (
+        "setpoint_room_cool_day",
+        31,
+        InputType.HOLDING_REGISTER,
+        DataType.FLOAT32,
+        None,
+        None,
+    ),
+    (
+        "setpoint_room_cool_night",
+        33,
+        InputType.HOLDING_REGISTER,
+        DataType.FLOAT32,
+        None,
+        None,
+    ),
+    ("setpoint_dhw", 173, InputType.HOLDING_REGISTER, DataType.FLOAT32, None, None),
+    (
+        "usr_pid_heatsetp",
+        101,
+        InputType.HOLDING_REGISTER,
+        DataType.FLOAT32,
+        None,
+        None,
+    ),
+    (
+        "usr_pid_coolsetp",
+        103,
+        InputType.HOLDING_REGISTER,
+        DataType.FLOAT32,
+        None,
+        None,
+    ),
+    ("modbus_roomtemp", 75, InputType.INPUT_REGISTER, DataType.FLOAT32, None, None),
+)
+
+_CORE_STATE_ENTITIES: tuple[EntityDef, ...] = tuple(
+    EntityDef(
+        key=key,
+        name=key,
+        address=address,
+        input_type=input_type,
+        data_type=data_type,
+        scale=scale,
+        offset=offset,
+    )
+    for key, address, input_type, data_type, scale, offset in _CORE_STATE_REGISTERS
+)
+
 
 class QubeClient:
     """Qube Modbus Client."""
@@ -109,53 +215,27 @@ class QubeClient:
 
         state = QubeState()
 
-        # Helper to read and assign
-        async def _read(const_def):
-            return await self.read_value(const_def)
+        # Batch-read the core sensor fields plus all binary sensors together.
+        # _plan_blocks groups by input type (input/holding/discrete_input/coil)
+        # regardless of which list an entity came from, so combining both
+        # tables into a single read_entities_batched() call still yields one
+        # handful of block transactions instead of ~59 per-field reads.
+        entities = [*_CORE_STATE_ENTITIES, *BINARY_SENSORS.values()]
+        results = await self.read_entities_batched(entities)
 
-        # Fetch temperature sensors
-        state.temp_supply = await _read(const.TEMP_SUPPLY)
-        state.temp_return = await _read(const.TEMP_RETURN)
-        state.temp_source_in = await _read(const.TEMP_SOURCE_IN)
-        state.temp_source_out = await _read(const.TEMP_SOURCE_OUT)
-        state.temp_room = await _read(const.TEMP_ROOM)
-        state.temp_dhw = await _read(const.TEMP_DHW)
-        state.temp_outside = await _read(const.TEMP_OUTSIDE)
+        for ent in _CORE_STATE_ENTITIES:
+            setattr(state, ent.key, results.get(ent.key))
 
-        # Fetch power and energy sensors
-        state.power_thermic = await _read(const.POWER_THERMIC)
-        state.power_electric = await _read(const.POWER_ELECTRIC_CALC)
-        state.energy_total_electric = await _read(const.ENERGY_ELECTRIC_TOTAL)
-        state.energy_total_thermic = await _read(const.ENERGY_THERMIC_TOTAL)
-        state.cop_calc = await _read(const.COP_CALC)
-
-        # Fetch operation sensors
-        state.status_code = await _read(const.STATUS_CODE)
-        state.compressor_speed = await _read(const.COMPRESSOR_SPEED)
-        flow_rate = await _read(const.FLOW_RATE)
+        flow_rate = state.flow_rate
         if flow_rate is not None and flow_rate < 0:
             flow_rate = 0.0
         state.flow_rate = flow_rate
 
-        # Fetch setpoints (holding registers)
-        state.setpoint_room_heat_day = await _read(const.SETPOINT_HEAT_DAY)
-        state.setpoint_room_heat_night = await _read(const.SETPOINT_HEAT_NIGHT)
-        state.setpoint_room_cool_day = await _read(const.SETPOINT_COOL_DAY)
-        state.setpoint_room_cool_night = await _read(const.SETPOINT_COOL_NIGHT)
-        state.setpoint_dhw = await _read(const.USER_DHW_SETPOINT)
-        state.usr_pid_heatsetp = await _read(const.USER_HEAT_SETPOINT)
-        state.usr_pid_coolsetp = await _read(const.USER_COOL_SETPOINT)
-
-        # LinQ thermostat room temperature (optional)
-        state.modbus_roomtemp = await _read(const.TEMP_ROOM_MODBUS)
-
         self._apply_monotonic_clamping(state)
 
-        # Fetch binary sensors
-        binary_data = await self.read_all_binary_sensors()
-        for key, value in binary_data.items():
+        for key in BINARY_SENSORS:
             if hasattr(state, key):
-                setattr(state, key, value)
+                setattr(state, key, results.get(key))
 
         # Compute unified status (status_code + anti-legionella override)
         state.status = const.resolve_status(state.status_code, state.req_antileg_1)
