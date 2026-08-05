@@ -144,6 +144,41 @@ async def test_batched_block_failure_falls_back_to_individual_reads(
 
 
 @pytest.mark.asyncio
+async def test_batched_short_successful_response_falls_back_to_individual_reads(
+    mock_modbus_client,
+):
+    """A well-formed but too-short block response degrades gracefully.
+
+    A device can return isError()==False with fewer registers/bits than the
+    requested count (a malformed-but-"successful" response). Previously this
+    slipped past the isError() check and crashed with an uncaught IndexError
+    while decoding, instead of falling back to individual reads like a failed
+    block does. Since get_all_data() is now polled by HA core every 15s via
+    this same batching path, such a response must degrade the same way a
+    failed block does, not raise.
+    """
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+    mock_instance.read_input_registers = AsyncMock(
+        side_effect=[
+            # Block read: isError() is False, but only 2 registers came back
+            # for a block that needs 4 (two float32 entities).
+            _register_response(_float32_regs(24.5)),
+            _register_response(_float32_regs(24.5)),  # individual read
+            _register_response(_float32_regs(25.0)),  # individual read
+        ]
+    )
+    client._client = mock_instance
+
+    entities = [SENSORS["temp_supply"], SENSORS["temp_return"]]
+    results = await client.read_entities_batched(entities)
+
+    assert mock_instance.read_input_registers.call_count == 3
+    assert round(results["temp_supply"], 1) == 24.5
+    assert round(results["temp_return"], 1) == 25.0
+
+
+@pytest.mark.asyncio
 async def test_get_all_entities_uses_batched_reads(mock_modbus_client):
     """get_all_entities reads all entities in a handful of transactions."""
     client = QubeClient("1.2.3.4", 502)

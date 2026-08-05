@@ -507,6 +507,17 @@ class QubeClient:
                     )
                 if result.isError():
                     raise OSError(f"Modbus error response for block @{start}")
+                if input_type_str in ("coil", "discrete_input"):
+                    if len(result.bits) < count:
+                        raise OSError(
+                            f"Short bit response for block {input_type_str}@{start} "
+                            f"(got {len(result.bits)}, expected {count})"
+                        )
+                elif len(result.registers) < count:
+                    raise OSError(
+                        f"Short register response for block {input_type_str}@{start} "
+                        f"(got {len(result.registers)}, expected {count})"
+                    )
             except Exception as exc:
                 self._log_read_failure(
                     f"block {input_type_str}@{start} (count {count})", exc
