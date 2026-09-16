@@ -51,7 +51,7 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
     ),
     EntityDef(
         key="tapw_timeprogram_dhws",
-        name="Minimum temperature DHW",
+        name="DHW setpoint (user)",
         address=44,
         input_type=InputType.HOLDING_REGISTER,
         data_type=DataType.FLOAT32,
@@ -60,7 +60,7 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
     ),
     EntityDef(
         key="tapw_timeprogram_dhws_prog",
-        name="DHW temperature (active program)",
+        name="DHW setpoint (time program, Linq min.)",
         address=46,
         input_type=InputType.HOLDING_REGISTER,
         data_type=DataType.FLOAT32,
@@ -107,7 +107,7 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
     ),
     EntityDef(
         key="tapw_timeprogram_dhwsetp_nolinq",
-        name="User-defined DHW setpoint",
+        name="DHW setpoint (Modbus)",
         address=173,
         input_type=InputType.HOLDING_REGISTER,
         data_type=DataType.FLOAT32,
@@ -299,7 +299,7 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
     ),
     EntityDef(
         key="dhw_setp",
-        name="DHW calculated setpoint",
+        name="Active DHW setpoint",
         address=47,
         input_type=InputType.INPUT_REGISTER,
         data_type=DataType.FLOAT32,
@@ -453,7 +453,7 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
     ),
     EntityDef(
         key="setpoint_dhw",
-        name="User-defined DHW setpoint",
+        name="DHW setpoint (Modbus)",
         address=173,
         input_type=InputType.HOLDING_REGISTER,
         data_type=DataType.FLOAT32,

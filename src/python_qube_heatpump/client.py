@@ -149,6 +149,9 @@ class QubeClient:
         self._next_connect_at: float = 0.0
         # Monotonic clamping for total_increasing counters
         self._monotonic_cache: dict[str, float] = {}
+        # Per-key count of consecutive reads that fell below the cached
+        # maximum by more than the reset threshold (see clamp_monotonic)
+        self._monotonic_reset_pending: dict[str, int] = {}
         # Reads that already produced a WARNING (transient failures are
         # logged once per target, then at DEBUG to avoid log spam)
         self._read_failures_warned: set[str] = set()
@@ -254,17 +257,48 @@ class QubeClient:
     def monotonic_cache(self, value: dict[str, float]) -> None:
         """Set the monotonic clamping cache (e.g. restored from disk)."""
         self._monotonic_cache = dict(value)
+        self._monotonic_reset_pending.clear()
 
-    def clamp_monotonic(self, key: str, value: float | None) -> float | None:
+    def clear_monotonic_cache(self) -> None:
+        """Forget all monotonic baselines.
+
+        The next reading of every counter is accepted as-is. Use this when
+        the controller's counters were reset on purpose and the clamped
+        values in the cache are known to be stale.
+        """
+        self._monotonic_cache.clear()
+        self._monotonic_reset_pending.clear()
+
+    # A drop below the cached maximum larger than this (in the counter's own
+    # unit: kWh for the energy totals) is treated as a counter reset rather
+    # than float32 jitter or a transient glitch...
+    MONOTONIC_RESET_THRESHOLD: float = 1.0
+    # ...but only after it has been seen on this many consecutive reads, so a
+    # single glitched zero read never drops a total_increasing counter.
+    MONOTONIC_RESET_CONFIRM_READS: int = 3
+
+    def clamp_monotonic(
+        self,
+        key: str,
+        value: float | None,
+        reset_threshold: float | None = None,
+    ) -> float | None:
         """Clamp a value to prevent decreases for total_increasing counters.
 
-        Returns the clamped value. If the new value is lower than the
-        previously seen value for this key, the previous value is returned.
-        None and non-finite values pass through unchanged.
+        If the new value is lower than the previously seen value for this
+        key by less than ``reset_threshold``, the previous value is returned
+        (jitter suppression). A larger drop is a counter-reset candidate: it
+        is still clamped until it has persisted for
+        ``MONOTONIC_RESET_CONFIRM_READS`` consecutive reads, after which the
+        low value is accepted as the new baseline and a warning is logged.
+        None and non-finite values pass through unchanged and do not affect
+        the reset detection.
 
         Args:
             key: Identifier for this counter (e.g. entity unique_id).
             value: The current reading.
+            reset_threshold: Drop size that counts as a reset; defaults to
+                ``MONOTONIC_RESET_THRESHOLD``.
 
         Returns:
             The clamped value, or None if input was None/non-finite.
@@ -272,8 +306,35 @@ class QubeClient:
         if value is None or not math.isfinite(value):
             return value
         previous = self._monotonic_cache.get(key)
-        if previous is not None and value < previous:
+        if previous is None or value >= previous:
+            self._monotonic_cache[key] = value
+            self._monotonic_reset_pending.pop(key, None)
+            return value
+
+        threshold = (
+            self.MONOTONIC_RESET_THRESHOLD
+            if reset_threshold is None
+            else reset_threshold
+        )
+        if previous - value < threshold:
+            # Sub-threshold jitter: clamp and forget any pending reset
+            self._monotonic_reset_pending.pop(key, None)
             return previous
+
+        pending = self._monotonic_reset_pending.get(key, 0) + 1
+        if pending < self.MONOTONIC_RESET_CONFIRM_READS:
+            self._monotonic_reset_pending[key] = pending
+            return previous
+
+        _LOGGER.warning(
+            "Counter reset detected for %s: value dropped from %s to %s on %d "
+            "consecutive reads; accepting it as the new baseline",
+            key,
+            previous,
+            value,
+            pending,
+        )
+        self._monotonic_reset_pending.pop(key, None)
         self._monotonic_cache[key] = value
         return value
 
