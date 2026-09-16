@@ -34,6 +34,7 @@ asyncio.run(main())
 - **Entity definitions** for sensors, binary sensors, and switches
 - **FLOAT32 decoding** with big endian (ABCD) byte order
 - **Type-safe dataclasses** for entity definitions
+- **Monotonic clamping with reset detection** for the energy totals: sub-kWh jitter is clamped, while a drop of more than 1 kWh that persists for 3 consecutive reads is accepted as a counter reset (logged as a warning); `clear_monotonic_cache()` forgets all baselines
 
 ## Entity Definitions
 
