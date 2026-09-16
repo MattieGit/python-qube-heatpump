@@ -1,5 +1,6 @@
 """Test the Qube Heat Pump client."""
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -591,3 +592,102 @@ async def test_read_entity_warns_again_per_entity(mock_modbus_client, caplog):
 
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 2
+
+
+@pytest.mark.asyncio
+async def test_clamp_monotonic_reset_detected_after_confirmation(mock_modbus_client):
+    """A drop larger than the reset threshold becomes the new baseline once confirmed."""
+    client = QubeClient("1.2.3.4", 502)
+    assert client.clamp_monotonic("energy", 1000.0) == 1000.0
+
+    # First two low reads are still clamped (could be a transient glitch)
+    assert client.clamp_monotonic("energy", 3.0) == 1000.0
+    assert client.clamp_monotonic("energy", 3.1) == 1000.0
+    # Third consecutive low read confirms the reset
+    assert client.clamp_monotonic("energy", 3.2) == 3.2
+    assert client.monotonic_cache["energy"] == 3.2
+    # Counting resumes from the new baseline
+    assert client.clamp_monotonic("energy", 3.5) == 3.5
+
+
+@pytest.mark.asyncio
+async def test_clamp_monotonic_reset_logs_warning(mock_modbus_client, caplog):
+    """Confirming a reset logs a warning naming the key."""
+    client = QubeClient("1.2.3.4", 502)
+    client.clamp_monotonic("energy_total_thermic", 500.0)
+    with caplog.at_level(logging.WARNING):
+        for _ in range(QubeClient.MONOTONIC_RESET_CONFIRM_READS):
+            client.clamp_monotonic("energy_total_thermic", 0.0)
+    assert "Counter reset detected" in caplog.text
+    assert "energy_total_thermic" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_clamp_monotonic_transient_glitch_does_not_reset(mock_modbus_client):
+    """A single low read followed by recovery must not become a new baseline."""
+    client = QubeClient("1.2.3.4", 502)
+    client.clamp_monotonic("energy", 1000.0)
+
+    assert client.clamp_monotonic("energy", 0.0) == 1000.0
+    assert client.clamp_monotonic("energy", 0.0) == 1000.0
+    # Recovery cancels the pending reset
+    assert client.clamp_monotonic("energy", 1000.2) == 1000.2
+    # A fresh low read starts counting from scratch again
+    assert client.clamp_monotonic("energy", 0.0) == 1000.2
+    assert client.clamp_monotonic("energy", 0.0) == 1000.2
+    assert client.monotonic_cache["energy"] == 1000.2
+
+
+@pytest.mark.asyncio
+async def test_clamp_monotonic_sub_threshold_jitter_still_clamped(mock_modbus_client):
+    """Drops smaller than the threshold are jitter and stay clamped forever."""
+    client = QubeClient("1.2.3.4", 502)
+    client.clamp_monotonic("energy", 1000.0)
+    for _ in range(10):
+        assert client.clamp_monotonic("energy", 999.5) == 1000.0
+    assert client.monotonic_cache["energy"] == 1000.0
+    # Jitter reads do not count towards reset confirmation
+    assert client.clamp_monotonic("energy", 0.0) == 1000.0
+    assert client.clamp_monotonic("energy", 0.0) == 1000.0
+    assert client.clamp_monotonic("energy", 999.5) == 1000.0
+    assert client.clamp_monotonic("energy", 0.0) == 1000.0
+    assert client.clamp_monotonic("energy", 0.0) == 1000.0
+    assert client.monotonic_cache["energy"] == 1000.0
+
+
+@pytest.mark.asyncio
+async def test_clamp_monotonic_custom_threshold(mock_modbus_client):
+    """The reset threshold can be overridden per call."""
+    client = QubeClient("1.2.3.4", 502)
+    client.clamp_monotonic("hours", 100.0, reset_threshold=10.0)
+    # A 5-unit drop is below the custom threshold: clamped, never a reset
+    for _ in range(5):
+        assert client.clamp_monotonic("hours", 95.0, reset_threshold=10.0) == 100.0
+    # A 50-unit drop is a reset
+    for _ in range(QubeClient.MONOTONIC_RESET_CONFIRM_READS - 1):
+        assert client.clamp_monotonic("hours", 50.0, reset_threshold=10.0) == 100.0
+    assert client.clamp_monotonic("hours", 50.0, reset_threshold=10.0) == 50.0
+
+
+@pytest.mark.asyncio
+async def test_clear_monotonic_cache(mock_modbus_client):
+    """Clearing the cache forgets baselines and pending resets."""
+    client = QubeClient("1.2.3.4", 502)
+    client.clamp_monotonic("energy", 1000.0)
+    client.clamp_monotonic("energy", 0.0)  # pending reset
+    client.clear_monotonic_cache()
+    assert client.monotonic_cache == {}
+    # Next read is accepted as a fresh baseline
+    assert client.clamp_monotonic("energy", 5.0) == 5.0
+
+
+@pytest.mark.asyncio
+async def test_monotonic_cache_setter_discards_pending_resets(mock_modbus_client):
+    """Restoring a cache from disk resets the reset-confirmation counters."""
+    client = QubeClient("1.2.3.4", 502)
+    client.clamp_monotonic("energy", 1000.0)
+    client.clamp_monotonic("energy", 0.0)
+    client.clamp_monotonic("energy", 0.0)
+    client.monotonic_cache = {"energy": 1000.0}
+    # Only one low read so far after the restore: still clamped
+    assert client.clamp_monotonic("energy", 0.0) == 1000.0
