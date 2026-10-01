@@ -788,16 +788,18 @@ class QubeClient:
             return None
         return await self.read_entity(entity)
 
+    async def _read_table(self, table: dict[str, EntityDef]) -> dict[str, Any]:
+        """Batch-read every entity in a table, keeping the table's key order."""
+        results = await self.read_entities_batched(table.values())
+        return {key: results.get(key) for key in table}
+
     async def read_all_sensors(self) -> dict[str, Any]:
         """Read all sensor values.
 
         Returns:
             Dictionary mapping sensor keys to their values.
         """
-        result: dict[str, Any] = {}
-        for key, entity in SENSORS.items():
-            result[key] = await self.read_entity(entity)
-        return result
+        return await self._read_table(SENSORS)
 
     async def read_all_binary_sensors(self) -> dict[str, bool | None]:
         """Read all binary sensor values.
@@ -805,10 +807,7 @@ class QubeClient:
         Returns:
             Dictionary mapping binary sensor keys to their values.
         """
-        result: dict[str, bool | None] = {}
-        for key, entity in BINARY_SENSORS.items():
-            result[key] = await self.read_entity(entity)
-        return result
+        return await self._read_table(BINARY_SENSORS)
 
     async def read_all_switches(self) -> dict[str, bool | None]:
         """Read all switch states.
@@ -816,10 +815,7 @@ class QubeClient:
         Returns:
             Dictionary mapping switch keys to their states.
         """
-        result: dict[str, bool | None] = {}
-        for key, entity in SWITCHES.items():
-            result[key] = await self.read_entity(entity)
-        return result
+        return await self._read_table(SWITCHES)
 
     async def write_switch(self, key: str, value: bool) -> bool:
         """Write a switch state by key.
