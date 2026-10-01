@@ -872,8 +872,11 @@ class QubeClient:
         Returns:
             Mode string ("off", "block", "plus", "max"), or None on error.
         """
-        bit_a = await self.read_switch("bms_sgready_a")
-        bit_b = await self.read_switch("bms_sgready_b")
+        results = await self.read_entities_batched(
+            [SWITCHES["bms_sgready_a"], SWITCHES["bms_sgready_b"]]
+        )
+        bit_a = results.get("bms_sgready_a")
+        bit_b = results.get("bms_sgready_b")
         if bit_a is None or bit_b is None:
             return None
         return self._SGREADY_BITS_TO_MODE.get((bool(bit_a), bool(bit_b)))
@@ -881,16 +884,41 @@ class QubeClient:
     async def set_sg_ready_mode(self, mode: str) -> bool:
         """Set the SG Ready mode.
 
+        Both coils are written in one request so the heat pump never sees
+        a half-applied mode. If the device rejects the multi-coil write,
+        the coils are written one after the other instead.
+
         Args:
             mode: One of "off", "block", "plus", "max".
 
         Returns:
-            True if both writes succeeded, False otherwise.
+            True if both coils were written, False otherwise.
         """
         bits = self._SGREADY_MODE_TO_BITS.get(mode)
         if bits is None:
             _LOGGER.warning("Unknown SG Ready mode: %s", mode)
             return False
+
+        coil_a = SWITCHES["bms_sgready_a"]
+        coil_b = SWITCHES["bms_sgready_b"]
+        if coil_b.address == coil_a.address + 1:
+            try:
+                result = await self._client.write_coils(
+                    coil_a.address, list(bits), device_id=self.unit
+                )
+            except Exception as e:
+                _LOGGER.error("Exception writing SG Ready mode %s: %s", mode, e)
+                if isinstance(e, _LINK_ERRORS):
+                    self._mark_disconnected()
+                return False
+            if not result.isError():
+                return True
+            _LOGGER.debug(
+                "Multi-coil write rejected for SG Ready mode %s; "
+                "falling back to single writes",
+                mode,
+            )
+
         success_a = await self.write_switch("bms_sgready_a", bits[0])
         success_b = await self.write_switch("bms_sgready_b", bits[1])
         return success_a and success_b
@@ -918,6 +946,24 @@ class QubeClient:
             _LOGGER.warning("Sensor %s is not a holding register", key)
             return False
 
+        if not isinstance(value, int | float) or not math.isfinite(value):
+            _LOGGER.warning(
+                "Refusing to write %r to %s: not a finite number", value, key
+            )
+            return False
+
+        if (entity.min_value is not None and value < entity.min_value) or (
+            entity.max_value is not None and value > entity.max_value
+        ):
+            _LOGGER.warning(
+                "Refusing to write %s to %s: outside allowed range %s..%s",
+                value,
+                key,
+                entity.min_value,
+                entity.max_value,
+            )
+            return False
+
         try:
             # Reverse scale/offset if needed
             write_value = value
@@ -936,15 +982,25 @@ class QubeClient:
                 result = await self._client.write_registers(
                     entity.address, regs, device_id=self.unit
                 )
-            elif entity.data_type == DataType.INT16:
-                if write_value < 0:
-                    write_value = int(write_value) + 65536
-                result = await self._client.write_register(
-                    entity.address, int(write_value), device_id=self.unit
+            elif entity.data_type in (DataType.INT16, DataType.UINT16):
+                raw = round(write_value)
+                low, high = (
+                    (-32768, 32767)
+                    if entity.data_type == DataType.INT16
+                    else (0, 65535)
                 )
-            elif entity.data_type == DataType.UINT16:
+                if not low <= raw <= high:
+                    _LOGGER.warning(
+                        "Refusing to write %s to %s: does not fit in %s",
+                        value,
+                        key,
+                        entity.data_type.value,
+                    )
+                    return False
+                if raw < 0:
+                    raw += 65536
                 result = await self._client.write_register(
-                    entity.address, int(write_value), device_id=self.unit
+                    entity.address, raw, device_id=self.unit
                 )
             else:
                 _LOGGER.warning(

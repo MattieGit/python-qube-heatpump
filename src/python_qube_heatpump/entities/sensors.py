@@ -85,6 +85,8 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
         platform=Platform.SENSOR,
         unit="°C",
         writable=True,  # User-override setpoint, bypasses heating curve
+        min_value=20.0,
+        max_value=65.0,
     ),
     EntityDef(
         key="usr_pid_coolsetp",
@@ -95,6 +97,8 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
         platform=Platform.SENSOR,
         unit="°C",
         writable=True,  # User-override setpoint, bypasses cooling curve
+        min_value=7.0,
+        max_value=25.0,
     ),
     EntityDef(
         key="regulation_buffersetp_max",
@@ -114,6 +118,8 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
         platform=Platform.SENSOR,
         unit="°C",
         writable=True,  # This setpoint can be written via Modbus
+        min_value=40.0,
+        max_value=65.0,
     ),
     # Input register sensors (read-only)
     EntityDef(
@@ -460,6 +466,8 @@ _SENSOR_DEFS: tuple[EntityDef, ...] = (
         platform=Platform.SENSOR,
         unit="°C",
         writable=True,
+        min_value=40.0,
+        max_value=65.0,
     ),
 )
 
