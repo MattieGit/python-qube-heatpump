@@ -79,3 +79,10 @@ class EntityDef:
     # Value precision
     precision: int | None = None
     """Number of decimal places to round to. None for no rounding."""
+
+    # Write limits
+    min_value: float | None = None
+    """Lowest value write_setpoint() accepts, in the entity's unit."""
+
+    max_value: float | None = None
+    """Highest value write_setpoint() accepts, in the entity's unit."""

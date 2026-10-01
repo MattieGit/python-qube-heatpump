@@ -54,7 +54,8 @@ async def async_get_mac_address(host: str, port: int = MODBUS_PORT) -> str | Non
     Returns:
         MAC address as lowercase colon-separated string, or None.
     """
-    ip = _resolve_ip(host)
+    # Both lookups block (DNS, file I/O), so keep them off the event loop
+    ip = await asyncio.to_thread(_resolve_ip, host)
     if ip is None:
         _LOGGER.debug("Could not resolve host %s to IP", host)
         return None
@@ -71,4 +72,4 @@ async def async_get_mac_address(host: str, port: int = MODBUS_PORT) -> str | Non
         _LOGGER.debug("Could not connect to %s:%s to populate ARP", ip, port)
         return None
 
-    return _read_arp_table(ip)
+    return await asyncio.to_thread(_read_arp_table, ip)
