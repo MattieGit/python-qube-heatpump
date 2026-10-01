@@ -118,3 +118,34 @@ async def test_get_mac_address_with_ip_directly():
         result = await async_get_mac_address("192.168.5.208")
 
     assert result == "00:0a:5c:94:83:15"
+
+
+@pytest.mark.asyncio
+async def test_get_mac_address_does_blocking_work_off_the_event_loop():
+    """DNS lookup and the ARP file read must not block the event loop."""
+    import threading
+
+    loop_thread = threading.current_thread()
+    seen: dict[str, threading.Thread] = {}
+
+    def fake_resolve(host):
+        seen["resolve"] = threading.current_thread()
+        return "192.168.5.208"
+
+    def fake_arp(ip):
+        seen["arp"] = threading.current_thread()
+        return "00:0a:5c:94:83:15"
+
+    with (
+        patch(
+            "python_qube_heatpump.network.asyncio.open_connection",
+            return_value=(AsyncMock(), AsyncMock()),
+        ),
+        patch("python_qube_heatpump.network._resolve_ip", side_effect=fake_resolve),
+        patch("python_qube_heatpump.network._read_arp_table", side_effect=fake_arp),
+    ):
+        result = await async_get_mac_address("qube.local")
+
+    assert result == "00:0a:5c:94:83:15"
+    assert seen["resolve"] is not loop_thread
+    assert seen["arp"] is not loop_thread

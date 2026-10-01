@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 
 @pytest.fixture
@@ -8,7 +8,8 @@ def mock_modbus_client(mocker):
     mock_client = mocker.patch("python_qube_heatpump.client.AsyncModbusTcpClient")
     mock_instance = mock_client.return_value
     mock_instance.connect = AsyncMock(return_value=True)
-    mock_instance.close = AsyncMock()
+    # pymodbus close() is synchronous
+    mock_instance.close = MagicMock()
     mock_instance.read_holding_registers = AsyncMock()
     mock_instance.read_input_registers = AsyncMock()
     mock_instance.write_register = AsyncMock()
