@@ -34,7 +34,24 @@ asyncio.run(main())
 - **Entity definitions** for sensors, binary sensors, and switches
 - **FLOAT32 decoding** with big endian (ABCD) byte order
 - **Type-safe dataclasses** for entity definitions
+- **mDNS device information**: panel software version, controller firmware and UUID from the controller's advertisement
 - **Monotonic clamping with reset detection** for the energy totals: sub-kWh jitter is clamped, while a drop of more than 1 kWh that persists for 3 consecutive reads is accepted as a counter reset (logged as a warning); `clear_monotonic_cache()` forgets all baselines
+
+## Device information over mDNS
+
+The controller advertises a `_workstation._tcp` mDNS service whose TXT record holds the software version shown on the panel, the controller firmware and a stable UUID. Register 77 (`async_get_software_version()`) reads 0.0 on recent firmware, so use this for the version instead:
+
+```python
+from zeroconf.asyncio import AsyncZeroconf
+from python_qube_heatpump import async_get_device_info
+
+aiozc = AsyncZeroconf()  # in Home Assistant: zeroconf.async_get_async_instance(hass)
+info = await async_get_device_info("192.168.1.100", aiozc)
+if info:
+    print(info.software_version, info.controller_firmware, info.uuid)
+```
+
+The lookup returns `None` when no record is found within the timeout (default 5 s), for example when mDNS is not forwarded between VLANs. `parse_device_info(properties)` parses TXT properties you already have, such as those from a zeroconf discovery.
 
 ## Entity Definitions
 
