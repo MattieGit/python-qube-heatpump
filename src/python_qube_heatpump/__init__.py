@@ -17,6 +17,7 @@ from .entities import (
     SENSORS,
     SWITCHES,
 )
+from .mdns import QubeDeviceInfo, async_get_device_info, parse_device_info
 from .models import QubeState
 from .network import async_get_mac_address
 
@@ -41,4 +42,8 @@ __all__ = [
     "resolve_status",
     # Network
     "async_get_mac_address",
+    # mDNS device information
+    "QubeDeviceInfo",
+    "async_get_device_info",
+    "parse_device_info",
 ]
