@@ -247,6 +247,23 @@ async def test_get_software_version(mock_modbus_client):
 
 
 @pytest.mark.asyncio
+async def test_get_software_version_zero(mock_modbus_client):
+    """Test an unpopulated register (reads 0) returns None, not "0.00"."""
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+
+    mock_resp = MagicMock()
+    mock_resp.isError.return_value = False
+    mock_resp.registers = [0, 0]
+
+    mock_instance.read_input_registers = AsyncMock(return_value=mock_resp)
+    client._client = mock_instance
+
+    result = await client.async_get_software_version()
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_get_software_version_error(mock_modbus_client):
     """Test software version returns None on error."""
     client = QubeClient("1.2.3.4", 502)
