@@ -394,10 +394,12 @@ class QubeClient:
         Reads InputRegister 77 (GeneralMng.Softversion).
 
         Returns:
-            Version as string (e.g., "2.15"), or None on error.
+            Version as string (e.g., "2.15"), or None on error or when the
+            register reads 0 (it is not populated on some firmware, e.g.
+            4.1.00; use ``async_get_device_info`` for the panel version).
         """
         value = await self.read_value(const.SOFTWARE_VERSION)
-        if value is None:
+        if not value:
             return None
         return f"{value:.2f}"
 
