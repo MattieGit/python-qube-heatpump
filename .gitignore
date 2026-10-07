@@ -137,3 +137,6 @@ cython_debug/
 # IDEs
 .idea/
 .vscode/
+
+# Personal Claude Code notes (loaded next to CLAUDE.md, never committed)
+CLAUDE.local.md
