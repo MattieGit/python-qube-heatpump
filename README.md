@@ -34,6 +34,7 @@ asyncio.run(main())
 - **Entity definitions** for sensors, binary sensors, and switches
 - **FLOAT32 decoding** with big endian (ABCD) byte order
 - **Type-safe dataclasses** for entity definitions
+- **Device verification**: `async_verify_device()` checks that a host answers like a Qube controller (register 77 readable, also when it reads 0 on recent firmware)
 - **mDNS device information**: panel software version, controller firmware and UUID from the controller's advertisement
 - **Monotonic clamping with reset detection** for the energy totals: sub-kWh jitter is clamped, while a drop of more than 1 kWh that persists for 3 consecutive reads is accepted as a counter reset (logged as a warning); `clear_monotonic_cache()` forgets all baselines
 

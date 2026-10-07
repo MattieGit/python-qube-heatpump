@@ -403,6 +403,19 @@ class QubeClient:
             return None
         return f"{value:.2f}"
 
+    async def async_verify_device(self) -> bool:
+        """Check that the device answers like a Qube controller.
+
+        Reads InputRegister 77 (GeneralMng.Softversion). Any readable value
+        counts, including 0: the register is not populated on some firmware
+        (e.g. 4.1.00), so use this rather than ``async_get_software_version``
+        to validate a host.
+
+        Returns:
+            True when the register can be read, False on error.
+        """
+        return await self.read_value(const.SOFTWARE_VERSION) is not None
+
     async def get_all_entities(self) -> dict[str, Any]:
         """Fetch all entity values from library definitions.
 
