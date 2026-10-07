@@ -280,6 +280,44 @@ async def test_get_software_version_error(mock_modbus_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("registers", "expected"),
+    [
+        pytest.param([16393, 39322], True, id="version"),
+        pytest.param([0, 0], True, id="unpopulated"),
+    ],
+)
+async def test_verify_device(mock_modbus_client, registers, expected):
+    """Test any readable register 77 value verifies the device, including 0."""
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+
+    mock_resp = MagicMock()
+    mock_resp.isError.return_value = False
+    mock_resp.registers = registers
+
+    mock_instance.read_input_registers = AsyncMock(return_value=mock_resp)
+    client._client = mock_instance
+
+    assert await client.async_verify_device() is expected
+
+
+@pytest.mark.asyncio
+async def test_verify_device_error(mock_modbus_client):
+    """Test a failed register 77 read does not verify the device."""
+    client = QubeClient("1.2.3.4", 502)
+    mock_instance = mock_modbus_client.return_value
+
+    mock_resp = MagicMock()
+    mock_resp.isError.return_value = True
+
+    mock_instance.read_input_registers = AsyncMock(return_value=mock_resp)
+    client._client = mock_instance
+
+    assert await client.async_verify_device() is False
+
+
+@pytest.mark.asyncio
 async def test_ensure_connected_reconnects(mock_modbus_client):
     """Test _ensure_connected reconnects when disconnected."""
     client = QubeClient("1.2.3.4", 502)
