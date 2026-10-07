@@ -1,129 +1,51 @@
-# Agents Instructions for python-qube-heatpump
+# Repository Guidelines
 
-## Overview
+Guidelines for coding agents and contributors working on `python-qube-heatpump`, the async Modbus/TCP
+library for Qube heat pumps (HR-energy, Carel c.pCO controller). `CLAUDE.md` only imports this file;
+keep everything here.
 
-Async Python library for Qube Heat Pump communication via Modbus TCP. Used by the Home Assistant `qube_heatpump` integration.
+## Layout
+- `src/python_qube_heatpump/client.py` — `QubeClient`: connection handling with backoff, batched block
+  reads, monotonic clamping of the energy and working-hour counters, validated writes, SG Ready.
+- `src/python_qube_heatpump/entities/` — the entity registry (`SENSORS`, `BINARY_SENSORS`, `SWITCHES`):
+  one frozen `EntityDef` per register or coil (key, address, input type, data type, scale, unit,
+  `writable`, `min_value`/`max_value`). `base.py` holds the dataclass and enums.
+- `src/python_qube_heatpump/const.py` — register tuples for `read_value()` (e.g. `SOFTWARE_VERSION`),
+  `StatusCode` and `resolve_status()`.
+- `src/python_qube_heatpump/models.py` — `QubeState`, the typed snapshot returned by `get_all_data()`;
+  the registers behind it are listed in `_CORE_STATE_ENTITIES` in `client.py`.
+- `src/python_qube_heatpump/mdns.py` — `async_get_device_info()` / `parse_device_info()`: panel software
+  version, controller firmware, project name and controller uuid from the `_workstation._tcp` mDNS
+  record (Carel vendor `000A5C`).
+- `src/python_qube_heatpump/network.py` — `async_get_mac_address()`.
+- `docs/modbus-lijst-qube-totaal.pdf` — the vendor register list (Dutch).
+- Public API: everything in `__init__.py` `__all__`; keep it backward compatible within a major version.
 
-## Quick Reference
+## Consumers
+- **HACS integration** (`~/Github/qube_heatpump`, domain `qube_heatpump`): pins `>=`; uses
+  `get_all_entities()`, `write_switch()`, `write_setpoint()`, the monotonic cache helpers,
+  `async_get_software_version()`, `async_verify_device()` and the mDNS helpers. The library entity key
+  becomes the integration's entity id suffix, so never rename a key.
+- **Home Assistant core** (`homeassistant/components/hr_energy_qube`): pins `==`, so every release
+  needs a bump PR in core; uses `get_all_data()`, `read_all_switches()`, `get_sg_ready_mode()`,
+  `async_get_software_version()`, `async_verify_device()` and the mDNS helpers.
+- A behaviour change in an existing method can break core's config flow or entities; check both
+  consumers before releasing (for example, 1.16.1 made a 0 software-version register return `None`,
+  which is why core validates with `async_verify_device()`).
 
-| Item | Location |
-|------|----------|
-| Main client | `src/python_qube_heatpump/client.py` |
-| Data model | `src/python_qube_heatpump/models.py` |
-| Register definitions | `src/python_qube_heatpump/const.py` |
-| Tests | `tests/test_client.py` |
-| Version | `pyproject.toml` → `project.version` |
+## Commands
+- Setup: `python3 -m venv .venv && .venv/bin/pip install -e ".[test]"`.
+- Tests: `pytest` (CI runs Python 3.12, 3.13 and 3.14).
+- Lint/format: `ruff check .` and `ruff format --check .`. CI pins ruff 0.14.14 (`uvx ruff@0.14.14`);
+  newer ruff defaults reformat the repo.
 
-## Current Version: 1.2.3
+## Releases
+- Bump `version` in `pyproject.toml` in the PR (semantic versioning).
+- After merge: `gh release create vX.Y.Z --target main` publishes to PyPI through
+  `.github/workflows/python-publish.yml` (trusted publishing). Watch the workflow run, not only PyPI;
+  a run that was never picked up by a runner uploaded nothing and can be re-run.
+- Then raise the pin in the HACS integration and open a bump PR in core.
 
-### Recent Changes (1.2.3)
-- `get_all_data()` now fetches all 21 sensor fields (previously only 4)
-- Full compatibility with Home Assistant qube_heatpump integration
-
-## Testing
-
-```bash
-# Setup
-python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[test]"
-
-# Run tests
-pytest tests/ -v
-```
-
-## Adding New Sensors
-
-1. **Add register definition** in `const.py`:
-   ```python
-   NEW_SENSOR = (address, ModbusType.INPUT, DataType.FLOAT32, scale, offset)
-   ```
-
-2. **Add field** to `QubeState` in `models.py`:
-   ```python
-   new_sensor: Optional[float] = None
-   ```
-
-3. **Fetch in `get_all_data()`** in `client.py`:
-   ```python
-   state.new_sensor = await _read(const.NEW_SENSOR)
-   ```
-
-4. **Update Home Assistant integration** to use the new field
-
-## Data Types
-
-| DataType | Registers | Notes |
-|----------|-----------|-------|
-| FLOAT32 | 2 | Little-endian word order |
-| INT16 | 1 | Signed |
-| UINT16 | 1 | Unsigned |
-| INT32 | 2 | Little-endian word order |
-| UINT32 | 2 | Little-endian word order |
-
-## Related Repository
-
-Home Assistant integration: `/Users/matthijskeij/Github/core/homeassistant/components/qube_heatpump/`
-
-When making changes, test both repos together:
-```bash
-# In HA core repo
-pip install -e /Users/matthijskeij/Github/python-qube-heatpump
-pytest tests/components/qube_heatpump -v
-```
-
-## Release Checklist
-
-- [ ] Update version in `pyproject.toml`
-- [ ] Run tests: `pytest tests/ -v`
-- [ ] Run linting: `ruff check src/ && ruff format --check src/`
-- [ ] Commit and push
-- [ ] Tag release: `git tag -a v1.x.x -m "Release message" && git push origin main --tags`
-- [ ] Verify PyPI publish (GitHub Action)
-- [ ] Update HA integration manifest.json with new version
-- [ ] Run HA integration tests
-
----
-
-## Architecture Decisions (Quick Reference)
-
-See `CLAUDE.md` for detailed rationale.
-
-### Entity Definitions
-- **Library defines**: key, name, address, input_type, data_type, unit, scale, offset, platform, writable
-- **Integration adds**: device_class, state_class, suggested_display_precision, translation_key, icon
-
-### File Structure (Target)
-```
-src/python_qube_heatpump/
-├── entities/
-│   ├── __init__.py          # Combined registry
-│   ├── base.py              # EntityDef dataclass
-│   ├── sensors.py           # Sensor definitions
-│   ├── binary_sensors.py    # Binary sensor definitions
-│   └── switches.py          # Switch definitions
-```
-
-### QubeState Strategy
-- Keep typed fields for core sensors (backward compatible with official HA)
-- Add `_extended: dict` for additional HACS entities
-- Use `state.get("key")` for extended entities
-- Promote to typed field when moving to official HA
-
-### QubeClient API
-```python
-# Type-specific reads
-read_sensor(entity) -> float | int | None
-read_binary_sensor(entity) -> bool | None
-read_switch_state(entity) -> bool | None
-
-# Writes
-write_switch(entity, value: bool) -> None
-write_setpoint(entity, value: float) -> None
-
-# Bulk
-get_all_data() -> QubeState  # Backward compatible
-read_entities(entities) -> dict[str, Any]
-```
-
-### Related Repos
-- HACS: `~/Github/qube_heatpump`
-- Official HA: `~/Github/core/homeassistant/components/qube_heatpump/`
+## Commits
+- Imperative subject lines; reference the version in release PRs (e.g. `... (v1.17.0)`).
+- No AI attribution or co-author trailers.
