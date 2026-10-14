@@ -38,6 +38,8 @@ keep everything here.
 - Tests: `pytest` (CI runs Python 3.12, 3.13 and 3.14).
 - Lint/format: `ruff check .` and `ruff format --check .`. CI pins ruff 0.14.14 (`uvx ruff@0.14.14`);
   newer ruff defaults reformat the repo.
+- Types: `mypy --strict src/python_qube_heatpump` (CI pins mypy 2.4.0). Home Assistant core runs the
+  integration under strict typing, so the library ships `py.typed` and must stay strict-clean.
 
 ## Releases
 - Bump `version` in `pyproject.toml` in the PR (semantic versioning).
