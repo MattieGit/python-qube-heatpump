@@ -7,7 +7,7 @@ import logging
 import math
 import struct
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 from pymodbus.client import AsyncModbusTcpClient
@@ -432,7 +432,12 @@ class QubeClient:
         ]
         return await self.read_entities_batched(all_entities)
 
-    async def read_value(self, definition: tuple) -> float | None:
+    async def read_value(
+        self,
+        definition: tuple[
+            int, const.ModbusType, const.DataType, float | None, float | None
+        ],
+    ) -> float | None:
         """Read a single value based on the constant definition."""
         address, reg_type, data_type, scale, offset = definition
 
@@ -458,7 +463,7 @@ class QubeClient:
                 return None
 
             regs = result.registers
-            val = 0
+            val: float | int = 0
 
             # Manual decoding to avoid pymodbus.payload dependencies
             # Assuming Little Endian Word Order for 32-bit values [LSW, MSW] per standard Modbus often used
@@ -521,7 +526,9 @@ class QubeClient:
         return 2 if data_type_str in ("float32", "uint32", "int32") else 1
 
     @staticmethod
-    def _decode_registers(data_type_str: str | None, regs: list[int]) -> float | int:
+    def _decode_registers(
+        data_type_str: str | None, regs: Sequence[int]
+    ) -> float | int:
         """Decode raw registers based on data type.
 
         Qube uses big endian word order (ABCD): regs[0]=MSW, regs[1]=LSW.
@@ -695,7 +702,7 @@ class QubeClient:
                 results[ent.key] = None
         return True
 
-    async def read_entity(self, entity: EntityDef) -> Any:
+    async def read_entity(self, entity: EntityDef) -> float | int | bool | None:
         """Read a single entity value based on EntityDef.
 
         Args:
@@ -712,7 +719,9 @@ class QubeClient:
                 self._mark_disconnected()
             return None
 
-    async def _read_entity_or_raise(self, entity: EntityDef) -> Any:
+    async def _read_entity_or_raise(
+        self, entity: EntityDef
+    ) -> float | int | bool | None:
         """Read a single entity; return None on an error reply, raise otherwise."""
         # Determine register count based on data type
         # Use string comparison to handle potential enum class differences
@@ -729,7 +738,7 @@ class QubeClient:
             if result.isError():
                 _LOGGER.warning("Error reading coil %s", entity.address)
                 return None
-            value: Any = bool(result.bits[0])
+            value: float | int | bool = bool(result.bits[0])
         elif input_type_str == "discrete_input":
             result = await self._client.read_discrete_inputs(
                 entity.address, count=1, device_id=self.unit
@@ -786,7 +795,8 @@ class QubeClient:
         if entity is None:
             _LOGGER.warning("Unknown binary sensor key: %s", key)
             return None
-        return await self.read_entity(entity)
+        value = await self.read_entity(entity)
+        return None if value is None else bool(value)
 
     async def read_switch(self, key: str) -> bool | None:
         """Read a switch state by key.
@@ -801,7 +811,8 @@ class QubeClient:
         if entity is None:
             _LOGGER.warning("Unknown switch key: %s", key)
             return None
-        return await self.read_entity(entity)
+        value = await self.read_entity(entity)
+        return None if value is None else bool(value)
 
     async def _read_table(self, table: dict[str, EntityDef]) -> dict[str, Any]:
         """Batch-read every entity in a table, keeping the table's key order."""
