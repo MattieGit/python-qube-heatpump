@@ -1,12 +1,15 @@
 # Python Qube Heat Pump Client
 
-Asyncio client for Qube heat pumps via Modbus TCP.
+Asyncio client for HR-energy Qube heat pumps via Modbus TCP. It powers the
+[Qube heat pump integration in Home Assistant](https://www.home-assistant.io/integrations/hr_energy_qube).
 
 ## Installation
 
 ```bash
 pip install python-qube-heatpump
 ```
+
+Requires Python 3.12 or newer.
 
 ## Usage
 
@@ -16,24 +19,31 @@ from python_qube_heatpump import QubeClient
 
 async def main():
     client = QubeClient("192.168.1.100", port=502, unit_id=1)
-    await client.connect()
+    if not await client.connect():
+        raise SystemExit("Cannot reach the heat pump")
 
-    state = await client.read_state()
-    print(f"Outside temp: {state.temp_outside}°C")
-    print(f"Supply temp: {state.temp_supply}°C")
-    print(f"DHW temp: {state.temp_dhw}°C")
+    state = await client.get_all_data()  # QubeState, or None when the connection failed
+    if state:
+        print(f"Status: {state.status}")
+        print(f"Outside temp: {state.temp_outside}°C")
+        print(f"Supply temp: {state.temp_supply}°C")
+        print(f"DHW temp: {state.temp_dhw}°C")
 
-    await client.disconnect()
+    await client.close()
 
 asyncio.run(main())
 ```
 
 ## Features
 
-- **Async Modbus TCP client** using pymodbus
+- **Async Modbus TCP client** using pymodbus, reconnecting with backoff after a lost connection
+- **Batched reads**: `get_all_data()` and `get_all_entities()` read neighbouring registers in a handful of block transactions instead of one request per register
 - **Entity definitions** for sensors, binary sensors, and switches
+- **Validated writes**: `write_switch()`, and `write_setpoint()` within each register's `min_value`/`max_value`
+- **SG Ready**: `get_sg_ready_mode()` / `set_sg_ready_mode()` with the modes `off`, `block`, `plus` and `max`
+- **Unified status**: `QubeState.status` combines the status code with the anti-legionella request (`resolve_status()`)
 - **FLOAT32 decoding** with big endian (ABCD) byte order
-- **Type-safe dataclasses** for entity definitions
+- **Typed**: ships `py.typed` and passes `mypy --strict`
 - **Device verification**: `async_verify_device()` checks that a host answers like a Qube controller (register 77 readable, also when it reads 0 on recent firmware)
 - **mDNS device information**: panel software version, controller firmware and UUID from the controller's advertisement
 - **Monotonic clamping with reset detection** for the energy totals: sub-kWh jitter is clamped, while a drop of more than 1 kWh that persists for 3 consecutive reads is accepted as a counter reset (logged as a warning); `clear_monotonic_cache()` forgets all baselines
@@ -74,7 +84,8 @@ The official Modbus register documentation from HR-Energy is available at:
 
 ## Related Projects
 
-- [qube_heatpump](https://github.com/MattieGit/qube_heatpump) - Home Assistant HACS integration using this library
+- [Qube heat pump](https://www.home-assistant.io/integrations/hr_energy_qube) - Home Assistant core integration (`hr_energy_qube`), available without HACS
+- [qube_heatpump](https://github.com/MattieGit/qube_heatpump) - Home Assistant custom integration (HACS) with extra features, such as a virtual thermostat and a DHW schedule
 
 ## License
 
