@@ -36,7 +36,8 @@ asyncio.run(main())
 
 ## Features
 
-- **Async Modbus TCP client** using pymodbus, reconnecting with backoff after a lost connection
+- **Async Modbus TCP client** on [modbus-connection](https://github.com/home-assistant-libs/modbus-connection) (tmodbus backend): it opens its own connection, or uses a `ModbusUnit` from a shared connection such as Home Assistant's (`QubeClient(host, unit=unit)`)
+- **Read retries**: a block read whose response went missing or arrived garbled is tried once more; writes are never retried
 - **Batched reads**: `get_all_data()` and `get_all_entities()` read neighbouring registers in a handful of block transactions instead of one request per register
 - **Entity definitions** for sensors, binary sensors, and switches
 - **Validated writes**: `write_switch()`, and `write_setpoint()` within each register's `min_value`/`max_value`
@@ -47,6 +48,18 @@ asyncio.run(main())
 - **Device verification**: `async_verify_device()` checks that a host answers like a Qube controller (register 77 readable, also when it reads 0 on recent firmware)
 - **mDNS device information**: panel software version, controller firmware and UUID from the controller's advertisement
 - **Monotonic clamping with reset detection** for the energy totals: sub-kWh jitter is clamped, while a drop of more than 1 kWh that persists for 3 consecutive reads is accepted as a counter reset (logged as a warning); `clear_monotonic_cache()` forgets all baselines
+
+## Shared Modbus connection
+
+Pass a `ModbusUnit` to use a connection someone else owns, for example Home Assistant's shared Modbus connection. `connect()` and `close()` then leave the connection alone; `host` only labels log messages.
+
+```python
+from homeassistant.components.modbus import async_get_unit
+from modbus_connection import ModbusTcpParams
+
+unit = async_get_unit(hass, entry, ModbusTcpParams(host=host, port=502), 1)
+client = QubeClient(host, unit=unit)
+```
 
 ## Device information over mDNS
 

@@ -1,10 +1,10 @@
 """Tests for batched block reads in QubeClient."""
 
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
+from helpers import float32_regs, script_reads
+from modbus_connection import IllegalDataAddressError
+from modbus_connection.mock import ReadEvent
 
-from python_qube_heatpump import QubeClient
 from python_qube_heatpump.entities import BINARY_SENSORS, SENSORS, SWITCHES
 from python_qube_heatpump.entities.base import (
     DataType,
@@ -14,36 +14,10 @@ from python_qube_heatpump.entities.base import (
 )
 
 
-def _bit_response(bits):
-    resp = MagicMock()
-    resp.isError.return_value = False
-    resp.bits = bits
-    return resp
-
-
-def _register_response(registers):
-    resp = MagicMock()
-    resp.isError.return_value = False
-    resp.registers = registers
-    return resp
-
-
-def _float32_regs(value):
-    import struct
-
-    int_val = struct.unpack(">I", struct.pack(">f", value))[0]
-    return [(int_val >> 16) & 0xFFFF, int_val & 0xFFFF]
-
-
 @pytest.mark.asyncio
-async def test_batched_discrete_inputs_single_transaction(mock_modbus_client):
+async def test_batched_discrete_inputs_single_transaction(client, unit):
     """Adjacent discrete inputs are read in one block transaction."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    mock_instance.read_discrete_inputs = AsyncMock(
-        return_value=_bit_response([True, False, True])
-    )
-    client._client = mock_instance
+    unit.discrete[0] = [True, False, True]
 
     entities = [
         BINARY_SENSORS["dout_srcpmp_val"],  # address 0
@@ -52,10 +26,10 @@ async def test_batched_discrete_inputs_single_transaction(mock_modbus_client):
     ]
     results = await client.read_entities_batched(entities)
 
-    assert mock_instance.read_discrete_inputs.call_count == 1
-    call = mock_instance.read_discrete_inputs.call_args
-    assert call.args[0] == 0
-    assert call.kwargs["count"] >= 3
+    assert len(unit.read_events) == 1
+    event = unit.read_events[0]
+    assert (event.register_type, event.address) == ("discrete", 0)
+    assert event.count >= 3
     assert results == {
         "dout_srcpmp_val": True,
         "dout_usrpmp_val": False,
@@ -64,15 +38,9 @@ async def test_batched_discrete_inputs_single_transaction(mock_modbus_client):
 
 
 @pytest.mark.asyncio
-async def test_batched_input_registers_decode_float32(mock_modbus_client):
+async def test_batched_input_registers_decode_float32(client, unit):
     """Adjacent float32 input registers decode correctly from one block."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    regs = _float32_regs(24.5) + _float32_regs(25.0)
-    mock_instance.read_input_registers = AsyncMock(
-        return_value=_register_response(regs)
-    )
-    client._client = mock_instance
+    unit.input[20] = float32_regs(24.5) + float32_regs(25.0)
 
     entities = [
         SENSORS["temp_supply"],  # address 20, float32
@@ -80,23 +48,16 @@ async def test_batched_input_registers_decode_float32(mock_modbus_client):
     ]
     results = await client.read_entities_batched(entities)
 
-    assert mock_instance.read_input_registers.call_count == 1
-    call = mock_instance.read_input_registers.call_args
-    assert call.args[0] == 20
-    assert call.kwargs["count"] == 4
+    assert unit.read_events == [ReadEvent("input", 20, 4)]
     assert round(results["temp_supply"], 1) == 24.5
     assert round(results["temp_return"], 1) == 25.0
 
 
 @pytest.mark.asyncio
-async def test_batched_far_apart_registers_split_into_blocks(mock_modbus_client):
+async def test_batched_far_apart_registers_split_into_blocks(client, unit):
     """Registers far apart are read in separate block transactions."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    mock_instance.read_holding_registers = AsyncMock(
-        return_value=_register_response(_float32_regs(1.0))
-    )
-    client._client = mock_instance
+    unit.holding[0] = float32_regs(1.0)
+    unit.holding[500] = float32_regs(2.0)
 
     ent_a = EntityDef(
         key="a",
@@ -114,136 +75,77 @@ async def test_batched_far_apart_registers_split_into_blocks(mock_modbus_client)
         platform=Platform.SENSOR,
         data_type=DataType.FLOAT32,
     )
-    await client.read_entities_batched([ent_a, ent_b])
+    results = await client.read_entities_batched([ent_a, ent_b])
 
-    assert mock_instance.read_holding_registers.call_count == 2
+    assert unit.read_events == [
+        ReadEvent("holding", 0, 2),
+        ReadEvent("holding", 500, 2),
+    ]
+    assert results == {"a": 1.0, "b": 2.0}
 
 
 @pytest.mark.asyncio
-async def test_batched_block_failure_falls_back_to_individual_reads(
-    mock_modbus_client,
-):
-    """If a block read fails, entities in it are read individually."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    mock_instance.read_input_registers = AsyncMock(
-        side_effect=[
-            OSError("No response received after 3 retries"),  # block read
-            _register_response(_float32_regs(24.5)),  # individual read
-            _register_response(_float32_regs(25.0)),  # individual read
-        ]
-    )
-    client._client = mock_instance
+async def test_batched_block_failure_falls_back_to_individual_reads(client, unit):
+    """If a block read gets an error reply, its entities are read individually."""
+    unit.input[20] = float32_regs(24.5) + float32_regs(25.0)
+    script_reads(unit, "read_input_registers", IllegalDataAddressError())
 
     entities = [SENSORS["temp_supply"], SENSORS["temp_return"]]
     results = await client.read_entities_batched(entities)
 
-    assert mock_instance.read_input_registers.call_count == 3
+    assert unit.read_events == [
+        ReadEvent("input", 20, 4),  # block read
+        ReadEvent("input", 20, 2),  # individual read
+        ReadEvent("input", 22, 2),  # individual read
+    ]
     assert round(results["temp_supply"], 1) == 24.5
     assert round(results["temp_return"], 1) == 25.0
+    assert client.is_connected is True
 
 
 @pytest.mark.asyncio
 async def test_batched_short_successful_response_falls_back_to_individual_reads(
-    mock_modbus_client,
+    client, unit
 ):
     """A well-formed but too-short block response degrades gracefully.
 
-    A device can return isError()==False with fewer registers/bits than the
-    requested count (a malformed-but-"successful" response). Previously this
-    slipped past the isError() check and crashed with an uncaught IndexError
-    while decoding, instead of falling back to individual reads like a failed
-    block does. Since get_all_data() is now polled by HA core every 15s via
-    this same batching path, such a response must degrade the same way a
-    failed block does, not raise.
+    A device can answer a block read with fewer registers/bits than the
+    requested count (a malformed-but-"successful" response). Decoding it
+    must not raise IndexError; since get_all_data() is polled by HA core
+    every 15s via this same batching path, such a response must degrade the
+    same way a failed block does: fall back to individual reads.
     """
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    mock_instance.read_input_registers = AsyncMock(
-        side_effect=[
-            # Block read: isError() is False, but only 2 registers came back
-            # for a block that needs 4 (two float32 entities).
-            _register_response(_float32_regs(24.5)),
-            _register_response(_float32_regs(24.5)),  # individual read
-            _register_response(_float32_regs(25.0)),  # individual read
-        ]
-    )
-    client._client = mock_instance
+    unit.input[20] = float32_regs(24.5) + float32_regs(25.0)
+    # Block read: only 2 registers come back for a block that needs 4
+    script_reads(unit, "read_input_registers", float32_regs(24.5))
 
     entities = [SENSORS["temp_supply"], SENSORS["temp_return"]]
     results = await client.read_entities_batched(entities)
 
-    assert mock_instance.read_input_registers.call_count == 3
+    assert len(unit.read_events) == 3
     assert round(results["temp_supply"], 1) == 24.5
     assert round(results["temp_return"], 1) == 25.0
 
 
 @pytest.mark.asyncio
-async def test_get_all_entities_uses_batched_reads(mock_modbus_client):
+async def test_get_all_entities_uses_batched_reads(client, unit):
     """get_all_entities reads all entities in a handful of transactions."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-
-    def _bits(address, count=1, **kwargs):
-        return _bit_response([False] * count)
-
-    def _regs(address, count=1, **kwargs):
-        return _register_response([0] * count)
-
-    mock_instance.read_coils = AsyncMock(side_effect=_bits)
-    mock_instance.read_discrete_inputs = AsyncMock(side_effect=_bits)
-    mock_instance.read_input_registers = AsyncMock(side_effect=_regs)
-    mock_instance.read_holding_registers = AsyncMock(side_effect=_regs)
-    client._client = mock_instance
-
     results = await client.get_all_entities()
 
     expected_keys = set(SENSORS) | set(BINARY_SENSORS) | set(SWITCHES)
     assert set(results) == expected_keys
-    total_calls = (
-        mock_instance.read_coils.call_count
-        + mock_instance.read_discrete_inputs.call_count
-        + mock_instance.read_input_registers.call_count
-        + mock_instance.read_holding_registers.call_count
-    )
-    assert total_calls <= 15
+    assert len(unit.read_events) <= 15
 
 
 @pytest.mark.asyncio
-async def test_get_all_data_uses_batched_reads(mock_modbus_client):
+async def test_get_all_data_uses_batched_reads(client, unit):
     """get_all_data (used by HA core, polled every 15s) reads via block reads.
 
-    Previously get_all_data() performed one Modbus transaction per field
-    (~59 transactions: 23 core sensors + 37 binary sensors). It should now
-    use the same batched block-read infrastructure as get_all_entities(),
-    landing in a handful of transactions instead.
+    A per-field implementation needs ~59 transactions (23 core sensors + 37
+    binary sensors). get_all_data() uses the same batched block-read
+    infrastructure as get_all_entities(), landing in a handful instead.
     """
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-
-    def _bits(address, count=1, **kwargs):
-        return _bit_response([False] * count)
-
-    def _regs(address, count=1, **kwargs):
-        return _register_response([0] * count)
-
-    mock_instance.read_coils = AsyncMock(side_effect=_bits)
-    mock_instance.read_discrete_inputs = AsyncMock(side_effect=_bits)
-    mock_instance.read_input_registers = AsyncMock(side_effect=_regs)
-    mock_instance.read_holding_registers = AsyncMock(side_effect=_regs)
-    client._client = mock_instance
-    client._connected = True
-
     state = await client.get_all_data()
 
     assert state is not None
-    total_calls = (
-        mock_instance.read_coils.call_count
-        + mock_instance.read_discrete_inputs.call_count
-        + mock_instance.read_input_registers.call_count
-        + mock_instance.read_holding_registers.call_count
-    )
-    # Old per-register/per-entity path made ~59 transactions (23 core
-    # fields + 37 binary sensors). Batched block reads should collapse
-    # this into a handful of transactions.
-    assert total_calls <= 15
+    assert len(unit.read_events) <= 15
