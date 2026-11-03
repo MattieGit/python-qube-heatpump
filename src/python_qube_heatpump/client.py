@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import math
@@ -10,8 +11,16 @@ import time
 from collections.abc import Iterable, Sequence
 from typing import Any
 
-from pymodbus.client import AsyncModbusTcpClient
-from pymodbus.exceptions import ConnectionException, ModbusIOException
+from modbus_connection import (
+    ModbusConnectionError,
+    ModbusError,
+    ModbusExceptionError,
+    ModbusProtocolError,
+    ModbusTcpParams,
+    ModbusTimeoutError,
+    ModbusUnit,
+)
+from modbus_connection.tmodbus import TmodbusConnection
 
 from . import const
 from .entities import BINARY_SENSORS, SENSORS, SWITCHES, EntityDef
@@ -21,19 +30,32 @@ from .models import QubeState
 _LOGGER = logging.getLogger(__name__)
 
 # Exceptions meaning the TCP link (or the device behind it) stopped answering,
-# as opposed to a Modbus error reply to one request. pymodbus raises
-# ConnectionException when it cannot connect and ModbusIOException when a
-# request got no response after its retries. OSError covers socket errors
-# and TimeoutError.
+# as opposed to a Modbus error reply to one request. OSError covers socket
+# errors; ModbusTimeoutError is also a TimeoutError.
 _LINK_ERRORS: tuple[type[Exception], ...] = (
-    ConnectionException,
-    ModbusIOException,
+    ModbusConnectionError,
+    ModbusTimeoutError,
     OSError,
+)
+
+# Block-read failures worth one more try: a missed or garbled response. The
+# Modbus transport never replays a request on its own (modbus-connection
+# turns those retries off), so the library retries reads itself. Writes are
+# never retried.
+_RETRYABLE_READ_ERRORS: tuple[type[Exception], ...] = (
+    ModbusTimeoutError,
+    ModbusProtocolError,
 )
 
 
 class _BlockReadError(Exception):
-    """A block read got a Modbus error reply or a short response."""
+    """A block read got a short response."""
+
+
+def _consume_exception(task: asyncio.Future[None]) -> None:
+    """Retrieve a finished task's exception so asyncio does not log it."""
+    if not task.cancelled():
+        task.exception()
 
 
 # Entities read by get_all_data() (used by the official HA core integration).
@@ -153,14 +175,40 @@ class QubeClient:
     _MAX_BLOCK_BITS = 256
     _MAX_GAP_REGISTERS = 8
     _MAX_GAP_BITS = 16
+    # Attempts per block read before the device counts as unreachable
+    _BLOCK_READ_ATTEMPTS = 2
 
-    def __init__(self, host: str, port: int = 502, unit_id: int = 1):
-        """Initialize."""
+    # Per-request timeout of a connection the client opens itself (seconds);
+    # tmodbus also applies it to connecting. A shared unit uses its
+    # connection's timeout.
+    TIMEOUT: float = 3.0
+
+    def __init__(
+        self,
+        host: str,
+        port: int = 502,
+        unit_id: int = 1,
+        *,
+        unit: ModbusUnit | None = None,
+    ) -> None:
+        """Initialize.
+
+        Without ``unit`` the client opens and owns its own Modbus TCP
+        connection to ``host``. With ``unit`` (for example from Home
+        Assistant's shared Modbus connection) the caller owns the
+        connection: ``connect()`` and ``close()`` leave it alone, and
+        ``host``/``port`` only label log and error messages.
+        """
         self.host = host
         self.port = port
         self.unit = unit_id
-        self._client = AsyncModbusTcpClient(host, port=port)
-        self._connected = False
+        self._connection: TmodbusConnection | None = None
+        if unit is None:
+            self._connection = TmodbusConnection(
+                ModbusTcpParams(host=host, port=port), timeout=self.TIMEOUT
+            )
+            unit = self._connection.for_unit(unit_id)
+        self._unit: ModbusUnit = unit
         # Backoff state
         self._backoff_seconds: float = 0.0
         self._backoff_max: float = 60.0
@@ -192,54 +240,70 @@ class QubeClient:
             self._read_failures_warned.discard(target)
             _LOGGER.info("Reading %s recovered", target)
 
-    def _mark_disconnected(self) -> None:
-        """Drop the connection after a link failure so the next poll reconnects.
-
-        pymodbus' connect() replaces the transport without closing the old
-        one, so the transport is closed here before any reconnect.
-        """
-        self._connected = False
-        with contextlib.suppress(Exception):
-            self._client.close()
+    async def _mark_disconnected(self) -> None:
+        """Drop the link after a link failure so the next request reconnects."""
+        with contextlib.suppress(ModbusError, OSError):
+            await self._unit.disconnect()
 
     async def connect(self) -> bool:
-        """Connect to the Modbus server."""
-        if not self._connected:
-            self._connected = await self._client.connect()
-            if self._connected:
-                self._backoff_seconds = 0.0
-                self._next_connect_at = 0.0
-        return self._connected
+        """Connect to the Modbus server.
+
+        Returns False when the device cannot be reached. With a shared
+        ``unit`` the caller owns the connection, which connects on the
+        next request, so this returns True.
+
+        Gives up after ``TIMEOUT`` seconds. The attempt runs in its own task
+        that neither this timeout nor a caller's timeout cancels: cancelling
+        the shielded connect inside modbus-connection makes asyncio log its
+        later failure as an error.
+        """
+        if self._connection is None:
+            return True
+        attempt = asyncio.ensure_future(self._connection.connect())
+        attempt.add_done_callback(_consume_exception)
+        await asyncio.wait({attempt}, timeout=self.TIMEOUT)
+        if not attempt.done():
+            _LOGGER.debug("Connecting to %s:%s timed out", self.host, self.port)
+            return False
+        if (exc := attempt.exception()) is not None:
+            if not isinstance(exc, (ModbusError, OSError)):
+                raise exc
+            _LOGGER.debug("Connecting to %s:%s failed: %s", self.host, self.port, exc)
+            return False
+        self._backoff_seconds = 0.0
+        self._next_connect_at = 0.0
+        return True
 
     @property
     def is_connected(self) -> bool:
         """Return True if connected."""
-        return self._connected
+        return self._unit.connected
 
-    async def _ensure_connected(self) -> None:
-        """Ensure connection is active, reconnecting with backoff if needed."""
-        if self._connected:
-            return
+    async def _ensure_connected(self) -> bool:
+        """Ensure the connection is up, reconnecting with backoff if needed."""
+        if self._unit.connected or self._connection is None:
+            return True
 
         now = time.monotonic()
         if now < self._next_connect_at:
-            return
+            return False
 
-        result = await self._client.connect()
-        if result:
-            self._connected = True
-            self._backoff_seconds = 0.0
-            self._next_connect_at = 0.0
-        else:
-            self._backoff_seconds = min(
-                self._backoff_max, max(1.0, self._backoff_seconds * 2)
-            )
-            self._next_connect_at = now + self._backoff_seconds
+        if await self.connect():
+            return True
+        self._backoff_seconds = min(
+            self._backoff_max, max(1.0, self._backoff_seconds * 2)
+        )
+        self._next_connect_at = now + self._backoff_seconds
+        return False
 
     async def close(self) -> None:
-        """Close connection."""
-        self._client.close()
-        self._connected = False
+        """Close the connection the client opened; a shared unit is left alone.
+
+        The client stays usable: the next request connects again.
+        """
+        if self._connection is not None:
+            with contextlib.suppress(ModbusError, OSError):
+                await self._connection.disconnect()
         self._backoff_seconds = 0.0
         self._next_connect_at = 0.0
 
@@ -250,8 +314,7 @@ class QubeClient:
         Returns None if not connected and reconnection fails, or if the
         connection was lost during this poll.
         """
-        await self._ensure_connected()
-        if not self._connected:
+        if not await self._ensure_connected():
             return None
 
         state = QubeState()
@@ -259,11 +322,11 @@ class QubeClient:
         # Batch-read the core sensor fields plus all binary sensors together.
         # _plan_blocks groups by input type (input/holding/discrete_input/coil)
         # regardless of which list an entity came from, so combining both
-        # tables into a single read_entities_batched() call still yields one
-        # handful of block transactions instead of ~59 per-field reads.
+        # tables into a single batched read still yields one handful of
+        # block transactions instead of ~59 per-field reads.
         entities = [*_CORE_STATE_ENTITIES, *BINARY_SENSORS.values()]
-        results = await self.read_entities_batched(entities)
-        if not self._connected:
+        results, link_ok = await self._read_batched(entities)
+        if not link_ok:
             return None
 
         for ent in _CORE_STATE_ENTITIES:
@@ -450,34 +513,11 @@ class QubeClient:
 
         try:
             if reg_type == const.ModbusType.INPUT:
-                result = await self._client.read_input_registers(
-                    address, count=count, device_id=self.unit
-                )
+                regs = await self._unit.read_input_registers(address, count)
             else:
-                result = await self._client.read_holding_registers(
-                    address, count=count, device_id=self.unit
-                )
-
-            if result.isError():
-                _LOGGER.warning("Error reading address %s", address)
-                return None
-
-            regs = result.registers
+                regs = await self._unit.read_holding_registers(address, count)
             val: float | int = 0
 
-            # Manual decoding to avoid pymodbus.payload dependencies
-            # Assuming Little Endian Word Order for 32-bit values [LSW, MSW] per standard Modbus often used
-            # But the original code used Endian.Little WordOrder.
-            # Decoder: byteorder=Endian.Big, wordorder=Endian.Little
-            # Big Endian Bytes: [H, L]
-            # Little Endian Words: [Reg0, Reg1] -> [LSW, MSW]
-            #
-            # Example Float32: 123.456
-            # Reg0 (LSW)
-            # Reg1 (MSW)
-            # Full 32-bit int: (Reg1 << 16) | Reg0
-            # Then pack as >I (Big Endian 32-bit int) and unpack as >f (Big Endian float)?
-            #
             # Qube uses Big Endian word order (ABCD format):
             # regs[0] = MSW (Most Significant Word)
             # regs[1] = LSW (Least Significant Word)
@@ -513,10 +553,13 @@ class QubeClient:
             self._log_read_ok(f"address {address}")
             return val
 
+        except ModbusExceptionError:
+            _LOGGER.warning("Error reading address %s", address)
+            return None
         except Exception as e:
             self._log_read_failure(f"address {address}", e)
             if isinstance(e, _LINK_ERRORS):
-                self._mark_disconnected()
+                await self._mark_disconnected()
             return None
 
     @staticmethod
@@ -606,82 +649,97 @@ class QubeClient:
         """Read entities using contiguous block reads.
 
         Groups entities into a handful of Modbus block reads instead of
-        one transaction per entity. If a block read fails, its entities
-        are read individually as a fallback. If one of those single reads
-        hits a link failure (no connection, no response), the device is
-        treated as unreachable: the client is marked disconnected and the
-        remaining reads are skipped.
+        one transaction per entity. A block whose response went missing or
+        arrived garbled is tried once more. If a block read gets an error
+        reply or a short response, its entities are read individually as a
+        fallback. On a link failure (no connection, or still no response
+        after the retry) the device is treated as unreachable: the link is
+        dropped and the remaining reads are skipped.
 
         Returns:
             Dictionary mapping every requested entity key to its value
             (None on error).
         """
+        results, _ = await self._read_batched(entities)
+        return results
+
+    async def _read_batched(
+        self, entities: Iterable[EntityDef]
+    ) -> tuple[dict[str, Any], bool]:
+        """Read entities in blocks; also return False when the link failed."""
         results: dict[str, Any] = {}
         blocks = self._plan_blocks(entities)
         for input_type_str, start, count, members in blocks:
             target = f"block {input_type_str}@{start} (count {count})"
             try:
-                result = await self._read_block(input_type_str, start, count)
+                values = await self._read_block_retrying(input_type_str, start, count)
             except Exception as exc:
                 self._log_read_failure(target, exc)
-                if not await self._read_individually(members, results):
-                    self._mark_disconnected()
+                if isinstance(exc, _LINK_ERRORS) or not await self._read_individually(
+                    members, results
+                ):
+                    await self._mark_disconnected()
                     for _, _, _, block_members in blocks:
                         for ent in block_members:
                             results.setdefault(ent.key, None)
-                    return results
+                    return results, False
                 continue
 
             self._log_read_ok(target)
             for ent in members:
                 offset = ent.address - start
                 if input_type_str in ("coil", "discrete_input"):
-                    results[ent.key] = bool(result.bits[offset])
+                    results[ent.key] = bool(values[offset])
                 else:
                     reg_count = self._register_count(ent)
-                    regs = result.registers[offset : offset + reg_count]
+                    regs = [int(v) for v in values[offset : offset + reg_count]]
                     data_type_str = ent.data_type.value if ent.data_type else None
                     val = self._decode_registers(data_type_str, regs)
                     results[ent.key] = self._apply_scaling(ent, val)
-        return results
+        return results, True
 
-    async def _read_block(self, input_type_str: str, start: int, count: int) -> Any:
-        """Read one block and validate the response.
+    async def _read_block_retrying(
+        self, input_type_str: str, start: int, count: int
+    ) -> list[int] | list[bool]:
+        """Read one block, trying again after a missed or garbled response."""
+        attempts_left = self._BLOCK_READ_ATTEMPTS
+        while True:
+            try:
+                return await self._read_block(input_type_str, start, count)
+            except _RETRYABLE_READ_ERRORS as exc:
+                attempts_left -= 1
+                if attempts_left <= 0:
+                    raise
+                _LOGGER.debug(
+                    "Retrying block %s@%s after: %s", input_type_str, start, exc
+                )
+
+    async def _read_block(
+        self, input_type_str: str, start: int, count: int
+    ) -> list[int] | list[bool]:
+        """Read one block and validate the response length.
 
         Raises:
-            _BlockReadError: On a Modbus error reply or a short response.
+            ModbusExceptionError: On a Modbus error reply.
+            _BlockReadError: On a short response.
             Any of _LINK_ERRORS: When the device could not be reached.
         """
+        values: list[int] | list[bool]
         if input_type_str == "coil":
-            result = await self._client.read_coils(
-                start, count=count, device_id=self.unit
-            )
+            values = await self._unit.read_coils(start, count)
         elif input_type_str == "discrete_input":
-            result = await self._client.read_discrete_inputs(
-                start, count=count, device_id=self.unit
-            )
+            values = await self._unit.read_discrete_inputs(start, count)
         elif input_type_str == "input":
-            result = await self._client.read_input_registers(
-                start, count=count, device_id=self.unit
-            )
+            values = await self._unit.read_input_registers(start, count)
         else:  # holding
-            result = await self._client.read_holding_registers(
-                start, count=count, device_id=self.unit
-            )
-        if result.isError():
-            raise _BlockReadError(f"Modbus error response for block @{start}")
-        if input_type_str in ("coil", "discrete_input"):
-            if len(result.bits) < count:
-                raise _BlockReadError(
-                    f"Short bit response for block {input_type_str}@{start} "
-                    f"(got {len(result.bits)}, expected {count})"
-                )
-        elif len(result.registers) < count:
+            values = await self._unit.read_holding_registers(start, count)
+        if len(values) < count:
+            kind = "bit" if input_type_str in ("coil", "discrete_input") else "register"
             raise _BlockReadError(
-                f"Short register response for block {input_type_str}@{start} "
-                f"(got {len(result.registers)}, expected {count})"
+                f"Short {kind} response for block {input_type_str}@{start} "
+                f"(got {len(values)}, expected {count})"
             )
-        return result
+        return values
 
     async def _read_individually(
         self, members: list[EntityDef], results: dict[str, Any]
@@ -716,52 +774,45 @@ class QubeClient:
         except Exception as e:
             self._log_read_failure(f"entity {entity.key}", e)
             if isinstance(e, _LINK_ERRORS):
-                self._mark_disconnected()
+                await self._mark_disconnected()
             return None
 
     async def _read_entity_or_raise(
         self, entity: EntityDef
     ) -> float | int | bool | None:
         """Read a single entity; return None on an error reply, raise otherwise."""
-        # Determine register count based on data type
         # Use string comparison to handle potential enum class differences
         data_type_str = entity.data_type.value if entity.data_type else None
         count = self._register_count(entity)
-
-        # Read based on input type (use string comparison for safety)
         input_type_str = entity.input_type.value if entity.input_type else None
 
+        value: float | int | bool
         if input_type_str == "coil":
-            result = await self._client.read_coils(
-                entity.address, count=1, device_id=self.unit
-            )
-            if result.isError():
+            try:
+                bits = await self._unit.read_coils(entity.address, 1)
+            except ModbusExceptionError:
                 _LOGGER.warning("Error reading coil %s", entity.address)
                 return None
-            value: float | int | bool = bool(result.bits[0])
+            value = bool(bits[0])
         elif input_type_str == "discrete_input":
-            result = await self._client.read_discrete_inputs(
-                entity.address, count=1, device_id=self.unit
-            )
-            if result.isError():
+            try:
+                bits = await self._unit.read_discrete_inputs(entity.address, 1)
+            except ModbusExceptionError:
                 _LOGGER.warning("Error reading discrete input %s", entity.address)
                 return None
-            value = bool(result.bits[0])
+            value = bool(bits[0])
         else:
-            if input_type_str == "input":
-                result = await self._client.read_input_registers(
-                    entity.address, count=count, device_id=self.unit
-                )
-            else:  # holding
-                result = await self._client.read_holding_registers(
-                    entity.address, count=count, device_id=self.unit
-                )
-
-            if result.isError():
+            try:
+                if input_type_str == "input":
+                    regs = await self._unit.read_input_registers(entity.address, count)
+                else:  # holding
+                    regs = await self._unit.read_holding_registers(
+                        entity.address, count
+                    )
+            except ModbusExceptionError:
                 _LOGGER.warning("Error reading address %s", entity.address)
                 return None
-
-            val = self._decode_registers(data_type_str, result.registers)
+            val = self._decode_registers(data_type_str, regs)
             value = self._apply_scaling(entity, val)
 
         self._log_read_ok(f"entity {entity.key}")
@@ -863,18 +914,16 @@ class QubeClient:
             return False
 
         try:
-            result = await self._client.write_coil(
-                entity.address, value, device_id=self.unit
-            )
-            if result.isError():
-                _LOGGER.warning("Error writing switch %s", key)
-                return False
-            return True
+            await self._unit.write_coil(entity.address, value)
+        except ModbusExceptionError:
+            _LOGGER.warning("Error writing switch %s", key)
+            return False
         except Exception as e:
             _LOGGER.error("Exception writing switch %s: %s", key, e)
             if isinstance(e, _LINK_ERRORS):
-                self._mark_disconnected()
+                await self._mark_disconnected()
             return False
+        return True
 
     # SG Ready mode API
     SG_READY_MODES = ("off", "block", "plus", "max")
@@ -925,21 +974,20 @@ class QubeClient:
         coil_b = SWITCHES["bms_sgready_b"]
         if coil_b.address == coil_a.address + 1:
             try:
-                result = await self._client.write_coils(
-                    coil_a.address, list(bits), device_id=self.unit
+                await self._unit.write_coils(coil_a.address, list(bits))
+            except ModbusExceptionError:
+                _LOGGER.debug(
+                    "Multi-coil write rejected for SG Ready mode %s; "
+                    "falling back to single writes",
+                    mode,
                 )
             except Exception as e:
                 _LOGGER.error("Exception writing SG Ready mode %s: %s", mode, e)
                 if isinstance(e, _LINK_ERRORS):
-                    self._mark_disconnected()
+                    await self._mark_disconnected()
                 return False
-            if not result.isError():
+            else:
                 return True
-            _LOGGER.debug(
-                "Multi-coil write rejected for SG Ready mode %s; "
-                "falling back to single writes",
-                mode,
-            )
 
         success_a = await self.write_switch("bms_sgready_a", bits[0])
         success_b = await self.write_switch("bms_sgready_b", bits[1])
@@ -1001,9 +1049,7 @@ class QubeClient:
                 packed = struct.pack(">f", write_value)
                 int_val = struct.unpack(">I", packed)[0]
                 regs = [(int_val >> 16) & 0xFFFF, int_val & 0xFFFF]
-                result = await self._client.write_registers(
-                    entity.address, regs, device_id=self.unit
-                )
+                await self._unit.write_registers(entity.address, regs)
             elif entity.data_type in (DataType.INT16, DataType.UINT16):
                 raw = round(write_value)
                 low, high = (
@@ -1021,22 +1067,19 @@ class QubeClient:
                     return False
                 if raw < 0:
                     raw += 65536
-                result = await self._client.write_register(
-                    entity.address, raw, device_id=self.unit
-                )
+                await self._unit.write_register(entity.address, raw)
             else:
                 _LOGGER.warning(
                     "Unsupported data type for writing: %s", entity.data_type
                 )
                 return False
 
-            if result.isError():
-                _LOGGER.warning("Error writing setpoint %s", key)
-                return False
-            return True
-
+        except ModbusExceptionError:
+            _LOGGER.warning("Error writing setpoint %s", key)
+            return False
         except Exception as e:
             _LOGGER.error("Exception writing setpoint %s: %s", key, e)
             if isinstance(e, _LINK_ERRORS):
-                self._mark_disconnected()
+                await self._mark_disconnected()
             return False
+        return True

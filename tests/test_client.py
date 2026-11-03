@@ -1,47 +1,41 @@
 """Test the Qube Heat Pump client."""
 
 import logging
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
+from helpers import float32_regs
+from modbus_connection import (
+    IllegalDataAddressError,
+    ModbusConnectionError,
+    ModbusTcpParams,
+)
+from modbus_connection.mock import ReadEvent, WriteEvent
 
-from python_qube_heatpump import QubeClient
+from python_qube_heatpump import QubeClient, const
+from python_qube_heatpump.entities import BINARY_SENSORS
 
 
 @pytest.mark.asyncio
-async def test_connect(mock_modbus_client):
-    """Test connection."""
+async def test_connect(connection_factory):
+    """An owned connection targets host:port and connects."""
     client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    mock_instance.connect.return_value = True
-    mock_instance.connected = False
+    connection_factory.assert_called_once_with(
+        ModbusTcpParams(host="1.2.3.4", port=502), timeout=QubeClient.TIMEOUT
+    )
+    assert client.is_connected is False
     assert await client.connect() is True
-    mock_modbus_client.assert_called_with("1.2.3.4", port=502)
+    assert client.is_connected is True
 
 
 @pytest.mark.asyncio
-async def test_read_value(mock_modbus_client):
+async def test_read_value(client, unit):
     """Test reading values."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    mock_instance.connected = True
-
-    # Mock response for reading holding registers (FLOAT32)
     # 24.5 = 0x41C40000 -> Big Endian word order (ABCD)
-    # Logic in client.py: int_val = (regs[0] << 16) | regs[1]
     # regs[0]=0x41C4=16836 (MSW), regs[1]=0x0000=0 (LSW)
-    mock_resp = MagicMock()
-    mock_resp.isError.return_value = False
-    mock_resp.registers = [16836, 0]
+    unit.holding[10] = [16836, 0]
 
-    mock_instance.read_holding_registers = AsyncMock(return_value=mock_resp)
-    client._client = mock_instance
-
-    # Test reading a FLOAT32 holding register
     # definition = (address, reg_type, data_type, scale, offset)
-    # We use a dummy definition
-    from python_qube_heatpump import const
-
     definition = (10, const.ModbusType.HOLDING, const.DataType.FLOAT32, None, None)
 
     result = await client.read_value(definition)
@@ -49,47 +43,27 @@ async def test_read_value(mock_modbus_client):
     # Verify result is approximately 24.5
     assert result is not None
     assert round(result, 1) == 24.5
-
-    mock_instance.read_holding_registers.assert_called_once()
+    assert unit.read_events == [ReadEvent("holding", 10, 2)]
 
 
 @pytest.mark.asyncio
-async def test_read_value_int16(mock_modbus_client):
+async def test_read_value_int16(client, unit):
     """Test reading INT16 value."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-
-    # Mock response for -10 (0xFFF6 = 65526)
-    mock_resp = MagicMock()
-    mock_resp.isError.return_value = False
-    mock_resp.registers = [65526]
-
-    mock_instance.read_input_registers = AsyncMock(return_value=mock_resp)
-    client._client = mock_instance
-
-    from python_qube_heatpump import const
+    # -10 = 0xFFF6 = 65526
+    unit.input[20] = 65526
 
     definition = (20, const.ModbusType.INPUT, const.DataType.INT16, None, None)
 
     result = await client.read_value(definition)
     assert result == -10
+    assert unit.read_events == [ReadEvent("input", 20, 1)]
 
 
 @pytest.mark.asyncio
-async def test_read_sensor(mock_modbus_client):
+async def test_read_sensor(client, unit):
     """Test reading a sensor by key."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-
-    # Mock response for temp_supply (FLOAT32) = 35.5°C
-    # 35.5 = 0x420E0000 -> Big Endian word order (ABCD)
-    # regs[0]=0x420E=16910 (MSW), regs[1]=0x0000=0 (LSW)
-    mock_resp = MagicMock()
-    mock_resp.isError.return_value = False
-    mock_resp.registers = [16910, 0]
-
-    mock_instance.read_input_registers = AsyncMock(return_value=mock_resp)
-    client._client = mock_instance
+    # temp_supply (FLOAT32) = 35.5°C: 0x420E0000 -> [0x420E=16910, 0]
+    unit.input[20] = [16910, 0]
 
     result = await client.read_sensor("temp_supply")
     assert result is not None
@@ -97,183 +71,117 @@ async def test_read_sensor(mock_modbus_client):
 
 
 @pytest.mark.asyncio
-async def test_read_sensor_unknown_key(mock_modbus_client):
+async def test_read_sensor_unknown_key(client, unit):
     """Test reading a sensor with unknown key returns None."""
-    client = QubeClient("1.2.3.4", 502)
     result = await client.read_sensor("unknown_sensor")
     assert result is None
+    assert unit.read_events == []
 
 
 @pytest.mark.asyncio
-async def test_read_binary_sensor(mock_modbus_client):
+async def test_read_binary_sensor(client, unit):
     """Test reading a binary sensor by key."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-
-    # Mock response for discrete input (True)
-    mock_resp = MagicMock()
-    mock_resp.isError.return_value = False
-    mock_resp.bits = [True]
-
-    mock_instance.read_discrete_inputs = AsyncMock(return_value=mock_resp)
-    client._client = mock_instance
+    unit.discrete[0] = True
 
     result = await client.read_binary_sensor("dout_srcpmp_val")
     assert result is True
+    assert unit.read_events == [ReadEvent("discrete", 0, 1)]
 
 
 @pytest.mark.asyncio
-async def test_read_binary_sensor_coil(mock_modbus_client):
+async def test_read_binary_sensor_coil(client, unit):
     """Test reading a coil-based binary sensor."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-
-    # Mock response for coil (False)
-    mock_resp = MagicMock()
-    mock_resp.isError.return_value = False
-    mock_resp.bits = [False]
-
-    mock_instance.read_coils = AsyncMock(return_value=mock_resp)
-    client._client = mock_instance
+    unit.coil[19] = False
 
     result = await client.read_binary_sensor("bms_demand")
     assert result is False
+    assert unit.read_events == [ReadEvent("coil", 19, 1)]
 
 
 @pytest.mark.asyncio
-async def test_read_switch(mock_modbus_client):
+async def test_read_switch(client, unit):
     """Test reading a switch by key."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-
-    # Mock response for coil (True)
-    mock_resp = MagicMock()
-    mock_resp.isError.return_value = False
-    mock_resp.bits = [True]
-
-    mock_instance.read_coils = AsyncMock(return_value=mock_resp)
-    client._client = mock_instance
+    unit.coil[22] = True
 
     result = await client.read_switch("bms_summerwinter")
     assert result is True
 
 
 @pytest.mark.asyncio
-async def test_read_switch_unknown_key(mock_modbus_client):
+async def test_read_switch_unknown_key(client, unit):
     """Test reading a switch with unknown key returns None."""
-    client = QubeClient("1.2.3.4", 502)
     result = await client.read_switch("unknown_switch")
     assert result is None
+    assert unit.read_events == []
 
 
 @pytest.mark.asyncio
-async def test_write_switch(mock_modbus_client):
+async def test_write_switch(client, unit, writes):
     """Test writing a switch."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-
-    mock_resp = MagicMock()
-    mock_resp.isError.return_value = False
-
-    mock_instance.write_coil = AsyncMock(return_value=mock_resp)
-    client._client = mock_instance
-
     result = await client.write_switch("bms_summerwinter", True)
     assert result is True
-    mock_instance.write_coil.assert_called_once()
+    assert writes == [WriteEvent("coil", 22, [True], 0x05)]
+    assert unit.coil[22] is True
 
 
 @pytest.mark.asyncio
-async def test_write_switch_unknown_key(mock_modbus_client):
+async def test_write_switch_unknown_key(client, writes):
     """Test writing a switch with unknown key returns False."""
-    client = QubeClient("1.2.3.4", 502)
     result = await client.write_switch("unknown_switch", True)
     assert result is False
+    assert writes == []
 
 
 @pytest.mark.asyncio
-async def test_write_setpoint(mock_modbus_client):
+async def test_write_setpoint(client, unit, writes):
     """Test writing a setpoint value."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-
-    mock_resp = MagicMock()
-    mock_resp.isError.return_value = False
-
-    mock_instance.write_registers = AsyncMock(return_value=mock_resp)
-    client._client = mock_instance
-
-    # setpoint_dhw is writable
+    # setpoint_dhw is writable; 55.0 = 0x425C0000
     result = await client.write_setpoint("setpoint_dhw", 55.0)
     assert result is True
-    mock_instance.write_registers.assert_called_once()
+    assert writes == [WriteEvent("holding", 173, [0x425C, 0], 0x10)]
+    assert [unit.holding[173], unit.holding[174]] == float32_regs(55.0)
 
 
 @pytest.mark.asyncio
-async def test_write_setpoint_non_writable(mock_modbus_client):
+async def test_write_setpoint_non_writable(client, writes):
     """Test writing a non-writable sensor returns False."""
-    client = QubeClient("1.2.3.4", 502)
     # temp_supply is not writable
     result = await client.write_setpoint("temp_supply", 35.0)
     assert result is False
+    assert writes == []
 
 
 @pytest.mark.asyncio
-async def test_write_setpoint_unknown_key(mock_modbus_client):
+async def test_write_setpoint_unknown_key(client, writes):
     """Test writing a setpoint with unknown key returns False."""
-    client = QubeClient("1.2.3.4", 502)
     result = await client.write_setpoint("unknown_sensor", 50.0)
     assert result is False
+    assert writes == []
 
 
 @pytest.mark.asyncio
-async def test_get_software_version(mock_modbus_client):
+async def test_get_software_version(client, unit):
     """Test reading software version."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-
-    # Mock response for version 2.15 as FLOAT32
     # 2.15 ~ 0x4009999A -> regs[0]=0x4009=16393, regs[1]=0x999A=39322
-    mock_resp = MagicMock()
-    mock_resp.isError.return_value = False
-    mock_resp.registers = [16393, 39322]
-
-    mock_instance.read_input_registers = AsyncMock(return_value=mock_resp)
-    client._client = mock_instance
+    unit.input[77] = [16393, 39322]
 
     result = await client.async_get_software_version()
-    assert result is not None
-    assert isinstance(result, str)
+    assert result == "2.15"
 
 
 @pytest.mark.asyncio
-async def test_get_software_version_zero(mock_modbus_client):
+async def test_get_software_version_zero(client, unit):
     """Test an unpopulated register (reads 0) returns None, not "0.00"."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-
-    mock_resp = MagicMock()
-    mock_resp.isError.return_value = False
-    mock_resp.registers = [0, 0]
-
-    mock_instance.read_input_registers = AsyncMock(return_value=mock_resp)
-    client._client = mock_instance
+    unit.input[77] = [0, 0]
 
     result = await client.async_get_software_version()
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_get_software_version_error(mock_modbus_client):
+async def test_get_software_version_error(client, unit):
     """Test software version returns None on error."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-
-    mock_resp = MagicMock()
-    mock_resp.isError.return_value = True
-
-    mock_instance.read_input_registers = AsyncMock(return_value=mock_resp)
-    client._client = mock_instance
+    unit.fail_read(77, IllegalDataAddressError(), register_type="input")
 
     result = await client.async_get_software_version()
     assert result is None
@@ -287,130 +195,92 @@ async def test_get_software_version_error(mock_modbus_client):
         pytest.param([0, 0], True, id="unpopulated"),
     ],
 )
-async def test_verify_device(mock_modbus_client, registers, expected):
+async def test_verify_device(client, unit, registers, expected):
     """Test any readable register 77 value verifies the device, including 0."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-
-    mock_resp = MagicMock()
-    mock_resp.isError.return_value = False
-    mock_resp.registers = registers
-
-    mock_instance.read_input_registers = AsyncMock(return_value=mock_resp)
-    client._client = mock_instance
+    unit.input[77] = registers
 
     assert await client.async_verify_device() is expected
 
 
 @pytest.mark.asyncio
-async def test_verify_device_error(mock_modbus_client):
+async def test_verify_device_error(client, unit):
     """Test a failed register 77 read does not verify the device."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-
-    mock_resp = MagicMock()
-    mock_resp.isError.return_value = True
-
-    mock_instance.read_input_registers = AsyncMock(return_value=mock_resp)
-    client._client = mock_instance
+    unit.fail_read(77, IllegalDataAddressError(), register_type="input")
 
     assert await client.async_verify_device() is False
 
 
 @pytest.mark.asyncio
-async def test_ensure_connected_reconnects(mock_modbus_client):
+async def test_ensure_connected_reconnects(owned_client, owned_connection, mocker):
     """Test _ensure_connected reconnects when disconnected."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    mock_instance.connect.return_value = True
-    client._client = mock_instance
-    client._connected = False
+    connects = mocker.spy(owned_connection, "_connect_client")
 
-    await client._ensure_connected()
-    assert client._connected is True
-    mock_instance.connect.assert_called_once()
+    assert await owned_client._ensure_connected() is True
+    assert owned_client.is_connected is True
+    assert connects.call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_ensure_connected_skips_when_connected(mock_modbus_client):
+async def test_ensure_connected_skips_when_connected(
+    owned_client, owned_connection, mocker
+):
     """Test _ensure_connected does nothing when already connected."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    client._client = mock_instance
-    client._connected = True
+    assert await owned_client.connect() is True
+    connect = mocker.spy(owned_connection, "connect")
 
-    await client._ensure_connected()
-    mock_instance.connect.assert_not_called()
+    assert await owned_client._ensure_connected() is True
+    connect.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_ensure_connected_backoff(mock_modbus_client):
+async def test_ensure_connected_backoff(owned_client, owned_connection, monkeypatch):
     """Test _ensure_connected applies exponential backoff on failure."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    mock_instance.connect.return_value = False
-    client._client = mock_instance
-    client._connected = False
+    monkeypatch.setattr(
+        owned_connection,
+        "connect",
+        AsyncMock(side_effect=ModbusConnectionError("refused")),
+    )
 
     # First failure — backoff starts at 1s
-    await client._ensure_connected()
-    assert client._connected is False
-    assert client._backoff_seconds == 1.0
+    assert await owned_client._ensure_connected() is False
+    assert owned_client.is_connected is False
+    assert owned_client._backoff_seconds == 1.0
+
+    # While backing off, no new attempt is made
+    assert await owned_client._ensure_connected() is False
+    assert owned_connection.connect.await_count == 1
 
     # Second failure — backoff doubles to 2s
-    client._next_connect_at = 0  # bypass wait for test
-    await client._ensure_connected()
-    assert client._backoff_seconds == 2.0
+    owned_client._next_connect_at = 0  # bypass wait for test
+    assert await owned_client._ensure_connected() is False
+    assert owned_client._backoff_seconds == 2.0
 
 
 @pytest.mark.asyncio
-async def test_ensure_connected_backoff_resets_on_success(mock_modbus_client):
+async def test_ensure_connected_backoff_resets_on_success(owned_client):
     """Test backoff resets after successful connect."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    client._client = mock_instance
-    client._connected = False
-    client._backoff_seconds = 16.0
+    owned_client._backoff_seconds = 16.0
 
-    mock_instance.connect.return_value = True
-    await client._ensure_connected()
-    assert client._connected is True
-    assert client._backoff_seconds == 0.0
+    assert await owned_client._ensure_connected() is True
+    assert owned_client.is_connected is True
+    assert owned_client._backoff_seconds == 0.0
 
 
 @pytest.mark.asyncio
-async def test_get_all_data_auto_reconnects(mock_modbus_client):
-    """Test get_all_data calls _ensure_connected before reading."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    mock_instance.connect.return_value = True
-    client._client = mock_instance
-    client._connected = False
+async def test_get_all_data_auto_reconnects(owned_client, owned_connection, mocker):
+    """Test get_all_data connects before reading."""
+    connects = mocker.spy(owned_connection, "_connect_client")
+    assert owned_client.is_connected is False
 
-    # Mock successful register reads. Batched block reads request a
-    # variable number of registers per block, so the mock must honor the
-    # requested `count` (a real Modbus server would too), unlike a fixed
-    # 2-register response.
-    def _resp(address, count=1, **kwargs):
-        resp = MagicMock()
-        resp.isError.return_value = False
-        resp.registers = [0] * count
-        return resp
-
-    mock_instance.read_input_registers = AsyncMock(side_effect=_resp)
-    mock_instance.read_holding_registers = AsyncMock(side_effect=_resp)
-
-    state = await client.get_all_data()
+    state = await owned_client.get_all_data()
     assert state is not None
-    # Verify connect was called (auto-reconnect happened)
-    mock_instance.connect.assert_called_once()
+    assert connects.call_count == 1
+    assert owned_client.is_connected is True
 
 
 @pytest.mark.asyncio
-async def test_clamp_monotonic_basic(mock_modbus_client):
+async def test_clamp_monotonic_basic(client):
     """Test clamp_monotonic prevents decreases."""
-    client = QubeClient("1.2.3.4", 502)
-
     # First value establishes baseline
     assert client.clamp_monotonic("energy", 100.0) == 100.0
     # Increase passes through
@@ -422,10 +292,8 @@ async def test_clamp_monotonic_basic(mock_modbus_client):
 
 
 @pytest.mark.asyncio
-async def test_clamp_monotonic_none_and_nan(mock_modbus_client):
+async def test_clamp_monotonic_none_and_nan(client):
     """Test clamp_monotonic passes through None and NaN."""
-    client = QubeClient("1.2.3.4", 502)
-
     # None passes through
     assert client.clamp_monotonic("energy", None) is None
 
@@ -443,10 +311,8 @@ async def test_clamp_monotonic_none_and_nan(mock_modbus_client):
 
 
 @pytest.mark.asyncio
-async def test_clamp_monotonic_independent_keys(mock_modbus_client):
+async def test_clamp_monotonic_independent_keys(client):
     """Test clamp_monotonic tracks keys independently."""
-    client = QubeClient("1.2.3.4", 502)
-
     client.clamp_monotonic("electric", 100.0)
     client.clamp_monotonic("thermic", 200.0)
 
@@ -456,10 +322,8 @@ async def test_clamp_monotonic_independent_keys(mock_modbus_client):
 
 
 @pytest.mark.asyncio
-async def test_monotonic_cache_property(mock_modbus_client):
+async def test_monotonic_cache_property(client):
     """Test monotonic_cache can be get/set for persistence."""
-    client = QubeClient("1.2.3.4", 502)
-
     # Cache starts empty
     assert client.monotonic_cache == {}
 
@@ -479,56 +343,37 @@ async def test_monotonic_cache_property(mock_modbus_client):
 
 
 @pytest.mark.asyncio
-async def test_get_all_data_applies_clamping(mock_modbus_client):
+async def test_get_all_data_applies_clamping(client, unit):
     """Test get_all_data uses clamp_monotonic for energy counters."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    client._client = mock_instance
-    client._connected = True
-
-    # Batched block reads request a variable `count` of registers per
-    # block, so the mock must honor it (a real Modbus server would too).
-    def _resp(address, count=1, **kwargs):
-        resp = MagicMock()
-        resp.isError.return_value = False
-        resp.registers = [0] * count
-        return resp
-
-    mock_instance.read_input_registers = AsyncMock(side_effect=_resp)
-    mock_instance.read_holding_registers = AsyncMock(side_effect=_resp)
+    unit.input[69] = float32_regs(120.0)  # energy_total_electric
+    unit.input[71] = float32_regs(480.0)  # energy_total_thermic
 
     state = await client.get_all_data()
     assert state is not None
     # Energy values stored in cache
-    assert client.monotonic_cache.get("energy_total_electric") == 0.0
-    assert client.monotonic_cache.get("energy_total_thermic") == 0.0
+    assert client.monotonic_cache.get("energy_total_electric") == 120.0
+    assert client.monotonic_cache.get("energy_total_thermic") == 480.0
+
+    # A small drop is clamped to the cached maximum
+    unit.input[69] = float32_regs(119.5)
+    state = await client.get_all_data()
+    assert state is not None
+    assert state.energy_total_electric == 120.0
 
 
 @pytest.mark.asyncio
-async def test_get_sg_ready_mode(mock_modbus_client):
+async def test_get_sg_ready_mode(client, unit):
     """Test reading SG Ready mode from coil bits."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    client._client = mock_instance
-
     # Both coils come back in one block read: A=False, B=True -> "plus"
-    mock_resp = MagicMock()
-    mock_resp.isError.return_value = False
-    mock_resp.bits = [False, True]
-
-    mock_instance.read_coils = AsyncMock(return_value=mock_resp)
+    unit.coil[65] = [False, True]
 
     result = await client.get_sg_ready_mode()
     assert result == "plus"
 
 
 @pytest.mark.asyncio
-async def test_get_sg_ready_mode_all_modes(mock_modbus_client):
+async def test_get_sg_ready_mode_all_modes(client, unit):
     """Test all SG Ready mode combinations."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    client._client = mock_instance
-
     cases = [
         ((False, False), "off"),
         ((True, False), "block"),
@@ -536,10 +381,7 @@ async def test_get_sg_ready_mode_all_modes(mock_modbus_client):
         ((True, True), "max"),
     ]
     for (bit_a, bit_b), expected_mode in cases:
-        resp = MagicMock()
-        resp.isError.return_value = False
-        resp.bits = [bit_a, bit_b]
-        mock_instance.read_coils = AsyncMock(return_value=resp)
+        unit.coil[65] = [bit_a, bit_b]
 
         result = await client.get_sg_ready_mode()
         assert result == expected_mode, (
@@ -548,62 +390,37 @@ async def test_get_sg_ready_mode_all_modes(mock_modbus_client):
 
 
 @pytest.mark.asyncio
-async def test_get_sg_ready_mode_read_error(mock_modbus_client):
+async def test_get_sg_ready_mode_read_error(client, unit):
     """Test SG Ready mode returns None on read error."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    client._client = mock_instance
-
-    mock_resp = MagicMock()
-    mock_resp.isError.return_value = True
-    mock_instance.read_coils = AsyncMock(return_value=mock_resp)
+    unit.fail_read(65, IllegalDataAddressError(), register_type="coil")
 
     result = await client.get_sg_ready_mode()
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_set_sg_ready_mode(mock_modbus_client):
+async def test_set_sg_ready_mode(client, unit, writes):
     """Test setting SG Ready mode writes both coils in one request."""
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    client._client = mock_instance
-
-    mock_resp = MagicMock()
-    mock_resp.isError.return_value = False
-    mock_instance.write_coils = AsyncMock(return_value=mock_resp)
-
     result = await client.set_sg_ready_mode("plus")
     assert result is True
 
     # "plus" = (False, True) -> A=False (coil 65), B=True (coil 66)
-    mock_instance.write_coils.assert_awaited_once()
-    assert mock_instance.write_coils.call_args.args == (65, [False, True])
+    assert writes == [WriteEvent("coil", 65, [False, True], 0x0F)]
+    assert (unit.coil[65], unit.coil[66]) == (False, True)
 
 
 @pytest.mark.asyncio
-async def test_set_sg_ready_mode_unknown(mock_modbus_client):
+async def test_set_sg_ready_mode_unknown(client, writes):
     """Test setting unknown SG Ready mode returns False."""
-    client = QubeClient("1.2.3.4", 502)
     result = await client.set_sg_ready_mode("turbo")
     assert result is False
+    assert writes == []
 
 
 @pytest.mark.asyncio
-async def test_read_entity_failure_logs_warning_once_then_debug(
-    mock_modbus_client, caplog
-):
+async def test_read_entity_failure_logs_warning_once_then_debug(client, unit, caplog):
     """Transient read failures log WARNING on first occurrence, DEBUG after."""
-    import logging
-
-    from python_qube_heatpump.entities import BINARY_SENSORS
-
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    mock_instance.read_discrete_inputs = AsyncMock(
-        side_effect=OSError("No response received after 3 retries")
-    )
-    client._client = mock_instance
+    unit.fail_read(0, OSError("No response"), register_type="discrete")
 
     entity = BINARY_SENSORS["dout_srcpmp_val"]
 
@@ -619,18 +436,9 @@ async def test_read_entity_failure_logs_warning_once_then_debug(
 
 
 @pytest.mark.asyncio
-async def test_read_entity_warns_again_per_entity(mock_modbus_client, caplog):
+async def test_read_entity_warns_again_per_entity(client, unit, caplog):
     """The warn-once tracking is per entity, not global."""
-    import logging
-
-    from python_qube_heatpump.entities import BINARY_SENSORS
-
-    client = QubeClient("1.2.3.4", 502)
-    mock_instance = mock_modbus_client.return_value
-    mock_instance.read_discrete_inputs = AsyncMock(
-        side_effect=OSError("No response received after 3 retries")
-    )
-    client._client = mock_instance
+    unit.fail_requests(OSError("No response"))
 
     with caplog.at_level(logging.DEBUG, logger="python_qube_heatpump.client"):
         await client.read_entity(BINARY_SENSORS["dout_srcpmp_val"])
@@ -641,9 +449,8 @@ async def test_read_entity_warns_again_per_entity(mock_modbus_client, caplog):
 
 
 @pytest.mark.asyncio
-async def test_clamp_monotonic_reset_detected_after_confirmation(mock_modbus_client):
+async def test_clamp_monotonic_reset_detected_after_confirmation(client):
     """A drop larger than the reset threshold becomes the new baseline once confirmed."""
-    client = QubeClient("1.2.3.4", 502)
     assert client.clamp_monotonic("energy", 1000.0) == 1000.0
 
     # First two low reads are still clamped (could be a transient glitch)
@@ -657,9 +464,8 @@ async def test_clamp_monotonic_reset_detected_after_confirmation(mock_modbus_cli
 
 
 @pytest.mark.asyncio
-async def test_clamp_monotonic_reset_logs_warning(mock_modbus_client, caplog):
+async def test_clamp_monotonic_reset_logs_warning(client, caplog):
     """Confirming a reset logs a warning naming the key."""
-    client = QubeClient("1.2.3.4", 502)
     client.clamp_monotonic("energy_total_thermic", 500.0)
     with caplog.at_level(logging.WARNING):
         for _ in range(QubeClient.MONOTONIC_RESET_CONFIRM_READS):
@@ -669,9 +475,8 @@ async def test_clamp_monotonic_reset_logs_warning(mock_modbus_client, caplog):
 
 
 @pytest.mark.asyncio
-async def test_clamp_monotonic_transient_glitch_does_not_reset(mock_modbus_client):
+async def test_clamp_monotonic_transient_glitch_does_not_reset(client):
     """A single low read followed by recovery must not become a new baseline."""
-    client = QubeClient("1.2.3.4", 502)
     client.clamp_monotonic("energy", 1000.0)
 
     assert client.clamp_monotonic("energy", 0.0) == 1000.0
@@ -685,9 +490,8 @@ async def test_clamp_monotonic_transient_glitch_does_not_reset(mock_modbus_clien
 
 
 @pytest.mark.asyncio
-async def test_clamp_monotonic_sub_threshold_jitter_still_clamped(mock_modbus_client):
+async def test_clamp_monotonic_sub_threshold_jitter_still_clamped(client):
     """Drops smaller than the threshold are jitter and stay clamped forever."""
-    client = QubeClient("1.2.3.4", 502)
     client.clamp_monotonic("energy", 1000.0)
     for _ in range(10):
         assert client.clamp_monotonic("energy", 999.5) == 1000.0
@@ -702,9 +506,8 @@ async def test_clamp_monotonic_sub_threshold_jitter_still_clamped(mock_modbus_cl
 
 
 @pytest.mark.asyncio
-async def test_clamp_monotonic_custom_threshold(mock_modbus_client):
+async def test_clamp_monotonic_custom_threshold(client):
     """The reset threshold can be overridden per call."""
-    client = QubeClient("1.2.3.4", 502)
     client.clamp_monotonic("hours", 100.0, reset_threshold=10.0)
     # A 5-unit drop is below the custom threshold: clamped, never a reset
     for _ in range(5):
@@ -716,9 +519,8 @@ async def test_clamp_monotonic_custom_threshold(mock_modbus_client):
 
 
 @pytest.mark.asyncio
-async def test_clear_monotonic_cache(mock_modbus_client):
+async def test_clear_monotonic_cache(client):
     """Clearing the cache forgets baselines and pending resets."""
-    client = QubeClient("1.2.3.4", 502)
     client.clamp_monotonic("energy", 1000.0)
     client.clamp_monotonic("energy", 0.0)  # pending reset
     client.clear_monotonic_cache()
@@ -728,9 +530,8 @@ async def test_clear_monotonic_cache(mock_modbus_client):
 
 
 @pytest.mark.asyncio
-async def test_monotonic_cache_setter_discards_pending_resets(mock_modbus_client):
+async def test_monotonic_cache_setter_discards_pending_resets(client):
     """Restoring a cache from disk resets the reset-confirmation counters."""
-    client = QubeClient("1.2.3.4", 502)
     client.clamp_monotonic("energy", 1000.0)
     client.clamp_monotonic("energy", 0.0)
     client.clamp_monotonic("energy", 0.0)

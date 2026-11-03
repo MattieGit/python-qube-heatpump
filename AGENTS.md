@@ -5,8 +5,8 @@ library for Qube heat pumps (HR-energy, Carel c.pCO controller). `CLAUDE.md` onl
 keep everything here.
 
 ## Layout
-- `src/python_qube_heatpump/client.py` — `QubeClient`: connection handling with backoff, batched block
-  reads, monotonic clamping of the energy and working-hour counters, validated writes, SG Ready.
+- `src/python_qube_heatpump/client.py` — `QubeClient`: Modbus I/O through a `modbus_connection.ModbusUnit`
+  (its own tmodbus connection, or a caller's shared unit), batched block reads with one retry, monotonic clamping of the energy and working-hour counters, validated writes, SG Ready.
 - `src/python_qube_heatpump/entities/` — the entity registry (`SENSORS`, `BINARY_SENSORS`, `SWITCHES`):
   one frozen `EntityDef` per register or coil (key, address, input type, data type, scale, unit,
   `writable`, `min_value`/`max_value`). `base.py` holds the dataclass and enums.
