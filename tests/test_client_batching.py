@@ -141,7 +141,7 @@ async def test_get_all_entities_uses_batched_reads(client, unit):
 async def test_get_all_data_uses_batched_reads(client, unit):
     """get_all_data (used by HA core, polled every 15s) reads via block reads.
 
-    A per-field implementation needs ~59 transactions (23 core sensors + 37
+    A per-field implementation needs ~65 transactions (29 core sensors + 37
     binary sensors). get_all_data() uses the same batched block-read
     infrastructure as get_all_entities(), landing in a handful instead.
     """
@@ -149,3 +149,25 @@ async def test_get_all_data_uses_batched_reads(client, unit):
 
     assert state is not None
     assert len(unit.read_events) <= 15
+
+
+@pytest.mark.asyncio
+async def test_get_all_data_reads_working_hours_like_the_sensor_table(client, unit):
+    """get_all_data returns the working hours exactly as get_all_entities does."""
+    keys = [
+        "workinghours_dhw_hrsret",
+        "workinghours_heat_hrsret",
+        "workinghours_cool_hrsret",
+        "workinghours_heater1_hrs",
+        "workinghours_heater2_hrs",
+        "workinghours_heater3_hrs",
+    ]
+    for index, key in enumerate(keys):
+        unit.input[SENSORS[key].address] = [1000 + index]
+
+    state = await client.get_all_data()
+
+    assert state is not None
+    assert [getattr(state, key) for key in keys] == [1000 + i for i in range(6)]
+    entities = await client.get_all_entities()
+    assert [entities[key] for key in keys] == [1000 + i for i in range(6)]

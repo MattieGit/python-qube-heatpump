@@ -38,6 +38,14 @@ class QubeState:
     compressor_speed: float | None = None
     flow_rate: float | None = None
 
+    # Working hours counters (hours)
+    workinghours_dhw_hrsret: int | None = None
+    workinghours_heat_hrsret: int | None = None
+    workinghours_cool_hrsret: int | None = None
+    workinghours_heater1_hrs: int | None = None
+    workinghours_heater2_hrs: int | None = None
+    workinghours_heater3_hrs: int | None = None
+
     # Setpoints (Read/Write)
     setpoint_room_heat_day: float | None = None
     setpoint_room_heat_night: float | None = None
