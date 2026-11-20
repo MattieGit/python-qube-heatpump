@@ -162,6 +162,18 @@ _CORE_STATE_ENTITIES: tuple[EntityDef, ...] = tuple(
         offset=offset,
     )
     for key, address, input_type, data_type, scale, offset in _CORE_STATE_REGISTERS
+) + tuple(
+    # The working hours counters are read exactly as the sensor table defines
+    # them, so get_all_data() and get_all_entities() report the same values.
+    SENSORS[key]
+    for key in (
+        "workinghours_dhw_hrsret",
+        "workinghours_heat_hrsret",
+        "workinghours_cool_hrsret",
+        "workinghours_heater1_hrs",
+        "workinghours_heater2_hrs",
+        "workinghours_heater3_hrs",
+    )
 )
 
 
